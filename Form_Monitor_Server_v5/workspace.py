@@ -188,10 +188,14 @@ class Workspace:
             self.worker=threading.Thread(target=self.execute,args=(p,runtime),daemon=False)
             self.worker.start()
 
-    def execute(self,p,runtime):
+    def environment_for_run(self,p,runtime):
         env=os.environ.copy();env.update(FM_PROFILE=str(runtime),FM_DATA_ROOT=str(self.root),ALERT_EMAIL=self.connections()['alert_email'],PYTHONIOENCODING='utf-8',PYTHONUNBUFFERED='1')
         if not self.user['owner']:
             for key in ('GMAIL_ADDRESS','GMAIL_APP_PASSWORD','LIVE_LINK_USER','LIVE_LINK_PASSWORD'):env.pop(key,None)
+        return env
+
+    def execute(self,p,runtime):
+        env=self.environment_for_run(p,runtime)
         secret_values=[env.get(k,'') for k in ('RESEND_API_KEY','GMAIL_APP_PASSWORD','LIVE_LINK_PASSWORD')]
         def redact(line):
             for secret in secret_values:
@@ -265,4 +269,3 @@ class Workspace:
         all_events.sort(key=lambda e:e.get('time_utc',''),reverse=True)
         return dict(user=self.user,google=self.oauth.status(),csrf=self.csrf,profiles=[p for p in profiles if not p.get('deleted')],active=active,logs=logs,connections=self.connections(),
             reports=all_reports[:200],events=all_events[:100])
-

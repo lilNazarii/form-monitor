@@ -11,7 +11,7 @@ from flask import Flask, request, jsonify, redirect, send_file, g
 from accounts import Accounts
 from workspace import Workspace, read_json, write_json
 from server_google import WebOAuth
-from server_network import validate_url
+from server_network import allowed_hosts, validate_url
 
 ROOT=Path(__file__).resolve().parent
 class RunnerBusy(ValueError):pass
@@ -27,8 +27,34 @@ class ServerWorkspace(Workspace):
         self.due={p['id']:max(time.time()+5,float(saved[p['id']])) for p in self.profiles if not p.get('deleted') and p['id'] in saved}
 
     def connections(self):
-        return dict(owner=False,gmail='',gmail_ready=False,live_link_ready=False,
+        return dict(owner=False,gmail='',gmail_ready=False,live_link_ready=bool(self.live_link_host()),
                     alert_email=self.user['email'],resend_ready=bool(os.environ.get('RESEND_API_KEY','')))
+
+    def live_link_host(self):
+        """A temporary test tunnel belongs only to the server's actual owner."""
+        host=os.environ.get('FM_LIVE_LINK_HOST','').strip().lower()
+        if not self.user.get('owner'):
+            return ''
+        if not re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.localsite\.io',host):
+            return ''
+        if host not in allowed_hosts():
+            return ''
+        if not os.environ.get('LIVE_LINK_USER','').strip() or not os.environ.get('LIVE_LINK_PASSWORD',''):
+            return ''
+        return host
+
+    def environment_for_run(self,p,runtime):
+        env=super().environment_for_run(p,runtime)
+        # Never inherit global mailbox credentials or tunnel credentials by default.
+        for key in ('GMAIL_ADDRESS','GMAIL_APP_PASSWORD','LIVE_LINK_USER','LIVE_LINK_PASSWORD'):
+            env.pop(key,None)
+        address=urlsplit(p['url'])
+        if (address.scheme=='https' and address.port in (None,443)
+                and not address.username and not address.password
+                and address.hostname==self.live_link_host()):
+            env['LIVE_LINK_USER']=os.environ['LIVE_LINK_USER'].strip()
+            env['LIVE_LINK_PASSWORD']=os.environ['LIVE_LINK_PASSWORD']
+        return env
 
     def save(self,data):
         validate_url(str(data.get('url','')))
@@ -38,6 +64,9 @@ class ServerWorkspace(Workspace):
     def ready(self,p):
         validate_url(p['url'])
         if not p.get('connection_id'):raise ValueError('Connect Gmail and choose it in Edit settings.')
+        host=urlsplit(p['url']).hostname
+        if host.endswith('.localsite.io') and host!=self.live_link_host():
+            raise ValueError('This Live Link is not configured for this account. The server owner must configure its exact hostname and credentials.')
         super().ready(p)
 
     def persist_schedule(self):

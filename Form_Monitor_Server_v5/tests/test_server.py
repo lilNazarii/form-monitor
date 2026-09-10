@@ -39,8 +39,8 @@ class ServerTests(unittest.TestCase):
         with patch('server_google.request_json',side_effect=response):
             r=self.get(c,'/oauth/google/callback?state='+query['state'][0]+'&code=test-code');self.assertEqual(r.status_code,303)
         return self.get(c,'/api/state').json['google']['accounts'][0]['id']
-    def profile(self,c,connection):
-        data=dict(name='A form',url='https://forms.example/contact/',selector='form.wpcf7-form',fields=dict(name='your-name',email='your-email',subject='your-subject',message='your-message'),interval=60,connection_id=connection)
+    def profile(self,c,connection,url='https://forms.example/contact/'):
+        data=dict(name='A form',url=url,selector='form.wpcf7-form',fields=dict(name='your-name',email='your-email',subject='your-subject',message='your-message'),interval=60,connection_id=connection)
         with patch('server.validate_url',return_value=data['url']):r=self.post(c,'/api/profiles',data)
         self.assertEqual(r.status_code,200,r.json);return r.json['id']
     def test_accounts_and_auth(self):
@@ -97,6 +97,62 @@ class ServerTests(unittest.TestCase):
         with patch('server_network.socket.getaddrinfo',return_value=[(2,1,6,'',('10.0.0.1',443))]):
             with self.assertRaises(ValueError):validate_url('https://forms.example/')
         with patch('server_network.socket.getaddrinfo',return_value=[(2,1,6,'',('93.184.216.34',443))]):self.assertEqual(validate_url('https://forms.example/'),'https://forms.example/')
+
+    def test_live_link_run_is_owner_and_host_scoped(self):
+        target='https://test-lab.localsite.io/contact/'
+        env={'FM_ALLOWED_FORM_HOSTS':'forms.example,test-lab.localsite.io,other-lab.localsite.io',
+             'FM_LIVE_LINK_HOST':'test-lab.localsite.io','LIVE_LINK_USER':'test-user',
+             'LIVE_LINK_PASSWORD':'test-tunnel-secret','GMAIL_ADDRESS':'legacy@example.com',
+             'GMAIL_APP_PASSWORD':'legacy-secret'}
+        with patch.dict(os.environ,env):
+            connection=self.connect(self.a,'owner@gmail.example')
+            ident=self.profile(self.a,connection,target)
+            aw=self.workspace(self.a)
+            second_connection=self.connect(self.b,'second@gmail.example')
+            second_id=self.profile(self.b,second_connection,target)
+            bw=self.workspace(self.b)
+            state=self.get(self.a,'/api/state')
+            self.assertNotIn('test-tunnel-secret',state.get_data(as_text=True))
+            self.assertFalse(bw.connections()['live_link_ready'])
+            with patch('server.validate_url'), patch('workspace.subprocess.Popen') as popen:
+                child=popen.return_value.__enter__.return_value
+                child.stdout=['test-tunnel-secret\n'];child.wait.return_value=0
+                response=self.post(self.a,'/api/run',dict(id=ident))
+                self.assertEqual(response.status_code,200,response.json)
+                aw.worker.join(timeout=5)
+                self.assertFalse(aw.worker.is_alive())
+                run_env=popen.call_args.kwargs['env']
+                self.assertEqual(run_env['LIVE_LINK_USER'],'test-user')
+                self.assertEqual(run_env['LIVE_LINK_PASSWORD'],'test-tunnel-secret')
+                self.assertNotIn('GMAIL_APP_PASSWORD',run_env)
+                self.assertNotIn('GMAIL_ADDRESS',run_env)
+                self.assertNotIn('test-tunnel-secret','\n'.join(aw.logs))
+                response=self.post(self.b,'/api/run',dict(id=second_id))
+                self.assertEqual(response.status_code,400,response.json)
+                self.assertEqual(popen.call_count,1)
+            for url in ('https://forms.example/contact/','https://other-lab.localsite.io/contact/'):
+                p=dict(aw.profile(ident),url=url)
+                run_env=aw.environment_for_run(p,self.root/'unused.json')
+                self.assertNotIn('LIVE_LINK_USER',run_env)
+                self.assertNotIn('LIVE_LINK_PASSWORD',run_env)
+            second_env=bw.environment_for_run(bw.profile(second_id),self.root/'unused.json')
+            self.assertNotIn('LIVE_LINK_PASSWORD',second_env)
+            with patch('server.validate_url'):
+                with self.assertRaisesRegex(ValueError,'not configured'):
+                    aw.ready(dict(aw.profile(ident),url='https://other-lab.localsite.io/contact/'))
+
+    def test_live_link_requires_explicit_complete_configuration(self):
+        aw=self.workspace(self.a)
+        base={'FM_ALLOWED_FORM_HOSTS':'test-lab.localsite.io','FM_LIVE_LINK_HOST':'test-lab.localsite.io',
+              'LIVE_LINK_USER':'test-user','LIVE_LINK_PASSWORD':'test-tunnel-secret'}
+        with patch.dict(os.environ,base):
+            for override in ({'FM_LIVE_LINK_HOST':''},{'FM_LIVE_LINK_HOST':'*.localsite.io'},
+                             {'FM_ALLOWED_FORM_HOSTS':'forms.example'},{'LIVE_LINK_USER':''},
+                             {'LIVE_LINK_PASSWORD':''}):
+                with self.subTest(override=override), patch.dict(os.environ,override):
+                    self.assertFalse(aw.connections()['live_link_ready'])
+                    run_env=aw.environment_for_run({'url':'https://test-lab.localsite.io/'},self.root/'unused.json')
+                    self.assertNotIn('LIVE_LINK_PASSWORD',run_env)
     def test_transfer_excludes_credentials(self):
         connection=self.connect(self.a,'owner@gmail.example');ident=self.profile(self.a,connection)
         archive=self.root/'migration.zip';export_data(self.root,'owner@example.com',archive)
