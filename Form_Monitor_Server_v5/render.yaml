@@ -1,0 +1,29 @@
+services:
+  - type: web
+    name: form-monitor-beta
+    runtime: docker
+    plan: 1c-2g
+    region: frankfurt
+    healthCheckPath: /healthz
+    numInstances: 1
+    disk:
+      name: form-monitor-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: FM_STORAGE_ROOT
+        value: /var/data
+      - key: FM_ENCRYPTION_KEY
+        sync: false
+      - key: FM_SETUP_CODE
+        generateValue: true
+      - key: FM_ALLOWED_EMAILS
+        sync: false
+      - key: FM_ALLOWED_FORM_HOSTS
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
