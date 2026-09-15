@@ -1,5 +1,8 @@
 """Single-instance, closed-beta HTTPS application. Run with the supplied Gunicorn config."""
 import atexit
+from contextlib import ExitStack
+import io
+import logging
 import os
 import re
 import secrets
@@ -12,6 +15,7 @@ from accounts import Accounts
 from workspace import Workspace, read_json, write_json
 from server_google import WebOAuth
 from server_network import allowed_hosts, validate_url
+from backups import create_backup, backup_files
 
 ROOT=Path(__file__).resolve().parent
 class RunnerBusy(ValueError):pass
@@ -109,9 +113,51 @@ class ServerHub:
         self.root=root;self.origin=origin;self.accounts=Accounts(root)
         if self.accounts.setup_required():self.accounts.setup_code=os.environ['FM_SETUP_CODE']
         self.workspaces={};self.lock=threading.RLock();self.runner=threading.Lock();self.stopping=False
+        self.mutations=threading.RLock()
+        self.backup_stop=threading.Event();self.backup_worker=None;self.backup_error=''
         # Schedules are restored for all accounts, without waiting for somebody to log in.
         with self.accounts.connect() as db:users=db.execute('SELECT id,email,owner FROM users').fetchall()
         for row in users:self.workspace(dict(id=row['id'],email=row['email'],owner=bool(row['owner'])))
+
+    def backup(self):
+        # Exclude HTTP mutations, workspace creation and scheduled/child checks.
+        # Runner acquisition must not block while a scheduler owns a workspace lock.
+        with self.mutations, self.lock, ExitStack() as locks:
+            if self.stopping:raise RunnerBusy('Server is restarting. Try again shortly.')
+            if not self.runner.acquire(blocking=False):
+                raise RunnerBusy('A check is running. Wait for it to finish before downloading a backup.')
+            locks.callback(self.runner.release)
+            locks.enter_context(self.accounts.lock)
+            for w in self.workspaces.values():
+                locks.enter_context(w.lock)
+                w.persist_schedule()
+            result=create_backup(self.root)
+            self.backup_error=''
+            return result
+
+    def backup_status(self):
+        files=backup_files(self.root)
+        latest=files[0] if files else None
+        return dict(latest=latest.stat().st_mtime if latest else None,count=len(files),
+                    automatic=os.environ.get('FM_BACKUPS_ENABLED','1')!='0',error=self.backup_error)
+
+    def backup_loop(self):
+        while not self.backup_stop.is_set():
+            try:
+                latest=self.backup_status()['latest']
+                if not self.accounts.setup_required() and (latest is None or time.time()-latest>=86400):
+                    self.backup()
+            except RunnerBusy:
+                pass  # Retry when the active check has finished.
+            except Exception as error:
+                self.backup_error='Automatic backup failed. Download a copy or check the server logs.'
+                logging.getLogger(__name__).error('Automatic backup failed (%s).',type(error).__name__)
+            self.backup_stop.wait(60)
+
+    def start_backups(self):
+        if os.environ.get('FM_BACKUPS_ENABLED','1')!='0':
+            self.backup_worker=threading.Thread(target=self.backup_loop,daemon=True)
+            self.backup_worker.start()
 
     def workspace(self,user):
         with self.lock:
@@ -122,6 +168,8 @@ class ServerHub:
             return self.workspaces[user['id']]
 
     def close(self):
+        self.backup_stop.set()
+        if self.backup_worker:self.backup_worker.join(timeout=10)
         with self.lock:
             self.stopping=True
             apps=list(self.workspaces.values())
@@ -154,6 +202,8 @@ def create_app():
         # Render's health probe contains no account data and may use an internal hostname.
         if request.path=='/healthz' and request.method=='GET':return None
         if request.host.lower()!=parsed.netloc.lower():return jsonify(error='Unexpected host.'),400
+        if request.method=='POST' or request.path=='/oauth/google/callback':
+            hub.mutations.acquire();g.mutation_lock=True
         g.auth=hub.accounts.session(current_token())
         if g.auth and g.auth['user']['email'] not in allowed:
             hub.accounts.logout(current_token());g.auth=None
@@ -163,6 +213,10 @@ def create_app():
             if not secrets.compare_digest(request.headers.get('X-CSRF-Token',''),csrf):return jsonify(error='Refresh the page and try again.'),403
         if (request.path.startswith('/api/') and request.path not in ('/api/session','/api/login','/api/register')) or request.path.startswith('/evidence/') or request.path=='/oauth/google/callback':
             if not g.auth:return jsonify(error='Please sign in.'),401
+
+    @app.teardown_request
+    def release_mutation_lock(error=None):
+        if g.pop('mutation_lock',False):hub.mutations.release()
 
     @app.after_request
     def security_headers(response):
@@ -197,7 +251,17 @@ def create_app():
         hub.accounts.logout(current_token());return cookie(jsonify(ok=True),'')
     @app.get('/api/state')
     def state():
-        value=workspace().snapshot();value['csrf']=g.auth['csrf'];return jsonify(value)
+        value=workspace().snapshot();value['csrf']=g.auth['csrf']
+        if g.auth['user']['owner']:value['backups']=hub.backup_status()
+        return jsonify(value)
+    @app.post('/api/backups/download')
+    def download_backup():
+        if not g.auth['user']['owner']:return jsonify(error='Only the server owner can download backups.'),403
+        files=backup_files(hub.root)
+        # Reuse a recent copy to avoid repeated clicks filling the disk.
+        path=files[0] if files and time.time()-files[0].stat().st_mtime<60 else hub.backup()
+        return send_file(io.BytesIO(path.read_bytes()),mimetype='application/octet-stream',
+                         as_attachment=True,download_name=path.name)
     @app.post('/api/profiles')
     def profile():return jsonify(ok=True,id=workspace().save(data()))
     @app.post('/api/run')
@@ -235,4 +299,5 @@ def create_app():
         if name=='workspace' and not g.auth:return redirect('/login',code=303)
         if name not in assets:return jsonify(error='Not found.'),404
         return send_file(ROOT/'dashboard_assets'/assets[name])
+    hub.start_backups()
     return app

@@ -17,7 +17,7 @@ from transfer import export_data, import_data
 class ServerTests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.root=Path(self.temp.name)
-        self.env=patch.dict(os.environ,{'FM_PUBLIC_URL':'https://beta.example','FM_STORAGE_ROOT':str(self.root),'FM_SETUP_CODE':'test-owner-code-that-is-long-enough','FM_ENCRYPTION_KEY':secrets.token_hex(32),'FM_ALLOWED_EMAILS':'owner@example.com,second@example.com','FM_ALLOWED_FORM_HOSTS':'forms.example','GOOGLE_CLIENT_ID':'test.apps.googleusercontent.com','GOOGLE_CLIENT_SECRET':'fake','RESEND_API_KEY':'fake'},clear=False);self.env.start()
+        self.env=patch.dict(os.environ,{'FM_BACKUPS_ENABLED':'0','FM_PUBLIC_URL':'https://beta.example','FM_STORAGE_ROOT':str(self.root),'FM_SETUP_CODE':'test-owner-code-that-is-long-enough','FM_ENCRYPTION_KEY':secrets.token_hex(32),'FM_ALLOWED_EMAILS':'owner@example.com,second@example.com','FM_ALLOWED_FORM_HOSTS':'forms.example','GOOGLE_CLIENT_ID':'test.apps.googleusercontent.com','GOOGLE_CLIENT_SECRET':'fake','RESEND_API_KEY':'fake'},clear=False);self.env.start()
         self.app=create_app();self.app.testing=True;self.hub=self.app.extensions['hub']
         self.a=self.app.test_client();self.b=self.app.test_client()
         self.register(self.a,'owner@example.com',True);self.register(self.b,'second@example.com')
@@ -163,3 +163,4 @@ class ServerTests(unittest.TestCase):
         with zipfile.ZipFile(archive) as z:self.assertEqual(z.namelist(),['workspace/profiles.json'])
 
 if __name__=='__main__':unittest.main()
+
