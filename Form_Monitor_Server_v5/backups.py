@@ -28,6 +28,15 @@ def encode_json(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True).encode('utf-8')
 
 
+def clear_reset_tokens(database):
+    """Recovery links are temporary access grants, not recoverable account data."""
+    with closing(sqlite3.connect(database)) as db:
+        if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='password_resets'").fetchone():
+            db.execute('PRAGMA secure_delete=ON')
+            db.execute('DELETE FROM password_resets')
+            db.commit()
+
+
 def validate_contents(files):
     """Check the database, JSON and encrypted Gmail tokens without making requests."""
     with tempfile.TemporaryDirectory(prefix='fm-verify-') as folder:
@@ -126,6 +135,7 @@ def create_backup(root):
         with closing(sqlite3.connect(source.as_uri() + '?mode=ro', uri=True)) as db:
             with closing(sqlite3.connect(snapshot)) as destination:
                 db.backup(destination)
+        clear_reset_tokens(snapshot)
         files = {ACCOUNT_DB: snapshot.read_bytes()}
         total = len(files[ACCOUNT_DB])
         for path in sorted((root / 'results/users').rglob('*')):
@@ -180,6 +190,7 @@ def restore_backup(archive, destination):
             path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             path.write_bytes(b'{}' if name.endswith('/schedule.json') else value)
             os.chmod(path, 0o600)
+        clear_reset_tokens(Path(stage) / ACCOUNT_DB)
         # Exclusive creation prevents replacing an existing data directory.
         destination.mkdir(mode=0o700)
         try:

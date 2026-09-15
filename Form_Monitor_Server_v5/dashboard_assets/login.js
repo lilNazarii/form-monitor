@@ -4,7 +4,7 @@ let csrf='', registering=false, setup=false;
 function mode(){
  $('title').textContent=setup?'Create your owner account':registering?'Create an account':'Welcome back.';
  $('intro').textContent=setup?'Set up the owner account for this server.':registering?'Start with a workspace that belongs to you.':'Your forms, checks, and connections. Right where you left them.';
- $('registration').hidden=!registering;$('owner-setup').hidden=!setup;$('setup-code').required=setup;
+ $('forgot-password').hidden=registering;$('registration').hidden=!registering;$('owner-setup').hidden=!setup;$('setup-code').required=setup;
  $('confirmation').required=registering;$('password').minLength=registering?12:1;
  $('password').autocomplete=registering?'new-password':'current-password';
  $('submit').textContent=registering?'Create account':'Sign in';
