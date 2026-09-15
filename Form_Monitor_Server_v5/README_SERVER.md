@@ -25,7 +25,7 @@
 | Переменная | Значение |
 | --- | --- |
 | FM_STORAGE_ROOT | /var/data — должен быть подключён постоянный диск |
-| FM_PUBLIC_URL | Канонический адрес https://ваш-сервис.onrender.com; если не задан, используется RENDER_EXTERNAL_URL |
+| FM_PUBLIC_URL | Основной HTTPS-адрес, например https://sentleaf.app; если не задан, используется RENDER_EXTERNAL_URL |
 | FM_ENCRYPTION_KEY | 64 случайных шестнадцатеричных символа; хранить отдельно от резервной копии данных |
 | FM_SETUP_CODE | Случайный код первого владельца, минимум 24 символа; Blueprint генерирует его |
 | FM_ALLOWED_EMAILS | Email владельца и приглашённых тестировщиков, через запятую |
@@ -33,6 +33,8 @@
 | GOOGLE_CLIENT_ID | ID клиента Google типа Web application |
 | GOOGLE_CLIENT_SECRET | Секрет того же клиента |
 | RESEND_API_KEY | Ключ Resend для уведомлений |
+
+При подключении своего домена сначала настройте DNS, дождитесь сертификата Render и добавьте `<FM_PUBLIC_URL>/oauth/google/callback` в Authorized redirect URIs клиента Google. Затем измените FM_PUBLIC_URL и перезапустите сервис. На новом домене потребуется снова войти в аккаунт. Ссылки на главную, кабинет, вход и восстановление пароля на прежнем адресе Render перенаправляются на новый домен; адрес Render определяется по системной переменной RENDER_EXTERNAL_HOSTNAME. Запросы API и OAuth на старом домене отклоняются, параметры URL не пересылаются. Render Subdomain оставьте включённым для работы старых закладок.
 
 Сгенерировать ключ на своём компьютере:
 
@@ -128,4 +130,3 @@ Gunicorn также проверен отдельным запуском: сер
 - [Google: срок действия refresh token в Testing](https://developers.google.com/identity/protocols/oauth2)
 - [Google: Gmail scopes и требования к проверке](https://developers.google.com/workspace/gmail/api/auth/scopes)
 - [Playwright: Docker](https://playwright.dev/python/docs/docker)
-

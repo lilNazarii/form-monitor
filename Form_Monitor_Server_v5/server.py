@@ -186,6 +186,8 @@ def create_app():
     parsed=urlsplit(origin)
     if parsed.scheme!='https' or not parsed.hostname or parsed.path or parsed.query or parsed.fragment or parsed.username or parsed.port not in (None,443):
         raise RuntimeError('Set FM_PUBLIC_URL to the canonical HTTPS origin.')
+    render_host=os.environ.get('RENDER_EXTERNAL_HOSTNAME','').strip().lower()
+    redirect_pages={'/','/workspace','/login','/forgot-password','/reset-password'}
     for key in ('FM_ENCRYPTION_KEY','FM_SETUP_CODE','FM_ALLOWED_EMAILS','FM_STORAGE_ROOT'):
         if not os.environ.get(key):raise RuntimeError('Missing server setting: '+key)
     if not re.fullmatch('[a-fA-F0-9]{64}',os.environ['FM_ENCRYPTION_KEY']):raise RuntimeError('FM_ENCRYPTION_KEY must be 64 hex characters.')
@@ -205,7 +207,12 @@ def create_app():
     def guard():
         # Render's health probe contains no account data and may use an internal hostname.
         if request.path=='/healthz' and request.method=='GET':return None
-        if request.host.lower()!=parsed.netloc.lower():return jsonify(error='Unexpected host.'),400
+        if request.host.lower()!=parsed.netloc.lower():
+            # Keep old Render bookmarks usable after moving to a custom domain.
+            # Never forward credentials, API calls, OAuth callbacks or query strings.
+            if render_host and request.host.lower()==render_host and request.method in ('GET','HEAD') and request.path in redirect_pages:
+                return redirect(origin+request.path,code=302)
+            return jsonify(error='Unexpected host.'),400
         if request.method=='POST' or request.path=='/oauth/google/callback':
             hub.mutations.acquire();g.mutation_lock=True
         g.auth=hub.accounts.session(current_token())

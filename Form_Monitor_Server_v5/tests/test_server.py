@@ -18,6 +18,8 @@ class ServerTests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.root=Path(self.temp.name)
         self.env=patch.dict(os.environ,{'FM_BACKUPS_ENABLED':'0','FM_PUBLIC_URL':'https://beta.example','FM_STORAGE_ROOT':str(self.root),'FM_SETUP_CODE':'test-owner-code-that-is-long-enough','FM_ENCRYPTION_KEY':secrets.token_hex(32),'FM_ALLOWED_EMAILS':'owner@example.com,second@example.com','FM_ALLOWED_FORM_HOSTS':'forms.example','GOOGLE_CLIENT_ID':'test.apps.googleusercontent.com','GOOGLE_CLIENT_SECRET':'fake','RESEND_API_KEY':'fake'},clear=False);self.env.start()
+        self.render_env=patch.dict(os.environ,{'RENDER_EXTERNAL_HOSTNAME':'legacy.onrender.com'});self.render_env.start()
+        self.addCleanup(self.render_env.stop)
         self.app=create_app();self.app.testing=True;self.hub=self.app.extensions['hub']
         self.a=self.app.test_client();self.b=self.app.test_client()
         self.register(self.a,'owner@example.com',True);self.register(self.b,'second@example.com')
@@ -62,6 +64,32 @@ class ServerTests(unittest.TestCase):
         self.post(self.b,'/api/google/disconnect',dict(id=ident));self.assertTrue(aw.oauth.store.path(ident).exists())
         with patch.dict(os.environ,{'FM_ENCRYPTION_KEY':secrets.token_hex(32)}):
             with self.assertRaises(ValueError):aw.oauth.store.load(ident)
+    def test_old_render_pages_redirect_to_canonical_domain(self):
+        for path in ('/','/workspace','/login','/forgot-password','/reset-password'):
+            for method in ('GET','HEAD'):
+                with self.subTest(path=path,method=method):
+                    r=self.a.open(path+'?next=https://evil.example&code=do-not-forward',method=method,base_url='https://legacy.onrender.com')
+                    self.assertEqual(r.status_code,302)
+                    self.assertEqual(r.headers['Location'],'https://beta.example'+path)
+                    self.assertNotIn('Set-Cookie',r.headers)
+                    self.assertEqual(r.headers['Cache-Control'],'no-store')
+    def test_old_render_domain_cannot_access_accounts_or_accept_mutations(self):
+        for path in ('/api/session','/api/state','/oauth/google/callback?code=secret','/evidence/private/page.png'):
+            with self.subTest(path=path):
+                r=self.a.get(path,base_url='https://legacy.onrender.com')
+                self.assertEqual(r.status_code,400)
+                self.assertNotIn('Location',r.headers)
+        for path in ('/','/login','/api/login','/api/password-reset/complete'):
+            with self.subTest(post=path):
+                r=self.a.post(path,base_url='https://legacy.onrender.com',json={})
+                self.assertEqual(r.status_code,400)
+                self.assertNotIn('Location',r.headers)
+        for host in ('evil.example','legacy.onrender.com.evil.example'):
+            self.assertEqual(self.a.get('/login',base_url='https://'+host).status_code,400)
+        csrf=self.get(self.a,'/api/session').json['csrf']
+        r=self.a.post('/api/logout',base_url='https://beta.example',json={},headers={'Origin':'https://legacy.onrender.com','X-CSRF-Token':csrf})
+        self.assertEqual(r.status_code,403)
+        self.assertIsNotNone(self.get(self.a,'/api/session').json['user'])
     def test_oauth_wrong_account_and_replay(self):
         query=parse_qs(urlsplit(self.post(self.a,'/api/google/start',{}).json['url']).query);state=query['state'][0]
         with patch('server_google.request_json') as network:
@@ -163,4 +191,3 @@ class ServerTests(unittest.TestCase):
         with zipfile.ZipFile(archive) as z:self.assertEqual(z.namelist(),['workspace/profiles.json'])
 
 if __name__=='__main__':unittest.main()
-
