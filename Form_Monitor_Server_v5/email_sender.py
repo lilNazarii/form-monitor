@@ -16,7 +16,7 @@ def send_email(subject, text):
         raise RuntimeError("ALERT_EMAIL is not configured.")
 
     payload = {
-        "from": "Form Monitor <onboarding@resend.dev>",
+        "from": "Sentleaf <onboarding@resend.dev>",
         "to": [recipient],
         "subject": subject,
         "text": text,
@@ -65,8 +65,8 @@ if __name__ == "__main__":
 
     try:
         send_email(
-            f"[Form Monitor] Email connection test {reference}",
-            "This is a test notification from Form Monitor.\n\n"
+            f"[Sentleaf] Email connection test {reference}",
+            "This is a test notification from Sentleaf.\n\n"
             "If you can read it in your mailbox, "
             "this test notification has reached you.\n\n"
             f"Reference: {reference}\n"

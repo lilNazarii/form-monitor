@@ -125,7 +125,7 @@ def notification_text(report, recovered=False):
         )
 
     return (
-        "Form Monitor\n\n"
+        "Sentleaf\n\n"
         f"Website: {SITE_URL}\n"
         f"Time (UTC): {now()}\n\n"
         f"{summary}\n\n"
@@ -166,14 +166,14 @@ def run_cycle(state):
     try:
         if current == "DOWN" and previous != "DOWN":
             event["email_id"] = send_email(
-                "[Form Monitor] Check needs attention",
+                "[Sentleaf] Check needs attention",
                 notification_text(final),
             )
             event["notification"] = "problem_accepted"
 
         elif current == "UP" and previous == "DOWN":
             event["email_id"] = send_email(
-                "[Form Monitor] Monitoring check recovered",
+                "[Sentleaf] Monitoring check recovered",
                 notification_text(final, recovered=True),
             )
             event["notification"] = "recovery_accepted"
@@ -226,7 +226,7 @@ def main():
 
     if args.test_email:
         send_email(
-            "[Form Monitor] Service email test",
+            "[Sentleaf] Service email test",
             "External email notifications are connected to service.py.\n\n"
             f"Website: {SITE_URL}\n"
             f"Time (UTC): {now()}",
@@ -258,3 +258,4 @@ if __name__ == "__main__":
     except Exception as error:
         print(f"\nSERVICE ERROR: {type(error).__name__}: {error}")
         raise SystemExit(2)
+

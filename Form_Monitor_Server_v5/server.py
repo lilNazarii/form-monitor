@@ -292,7 +292,7 @@ def create_app():
         path=w.root/'results/monitors'/ident/'reports'/run/'page.png'
         if not path.is_file():return jsonify(error='Not found.'),404
         return send_file(path,mimetype='image/png')
-    assets={'':'home.html','workspace':'index.html','login':'login.html','login.js':'login.js','login.css':'login.css','home.css':'home.css','home.js':'home.js','style.css':'style.css','app.js':'app.js'}
+    assets={'':'home.html','workspace':'index.html','login':'login.html','login.js':'login.js','login.css':'login.css','home.css':'home.css','home.js':'home.js','style.css':'style.css','app.js':'app.js','brand.css':'brand.css','logo.svg':'logo.svg','favicon.svg':'favicon.svg','instrument-regular.woff2':'instrument-regular.woff2','instrument-semibold.woff2':'instrument-semibold.woff2'}
     @app.get('/')
     @app.get('/<path:name>')
     def static_file(name=''):
