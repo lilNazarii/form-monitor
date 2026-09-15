@@ -6,7 +6,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 
-def send_email(subject, text, *, recipient=None, sensitive=False):
+def send_email(subject, text, *, recipient=None, sensitive=False, html=None):
     api_key = os.environ.get("RESEND_API_KEY", "").strip()
     recipient = (os.environ.get("ALERT_EMAIL", "") if recipient is None else recipient).strip()
 
@@ -21,6 +21,8 @@ def send_email(subject, text, *, recipient=None, sensitive=False):
         "subject": subject,
         "text": text,
     }
+    if html is not None:
+        payload['html'] = html
 
     request = Request(
         "https://api.resend.com/emails",

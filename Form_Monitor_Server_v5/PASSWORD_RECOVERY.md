@@ -10,6 +10,8 @@ The existing `RESEND_API_KEY` sends account emails. The recipient comes from the
 
 Requests return the same HTTP 202 message for existing, unknown, disabled, and throttled addresses. A bounded background queue keeps mail-provider latency out of this response. A response is not proof of delivery. If no email arrives, wait one minute and request again; inspect the provider and sanitized Render logs if needed. A missing API key produces a generic 503 availability message for everyone.
 
+Account emails include a Sentleaf HTML layout and an explicit plain-text alternative. The reset email has a green banner, a **Reset password** button, the 15-minute expiry, and a copyable fallback URL. The confirmation email uses the same layout with a sign-in button. Table layout and inline styles keep the design independent of remote images, fonts, and JavaScript. All dynamic content is HTML-escaped; action links point directly to the configured Sentleaf origin.
+
 ## Link and password handling
 
 - Tokens have 32 random bytes; only their SHA-256 hash is stored in SQLite.
@@ -32,7 +34,7 @@ Startup adds a `password_resets` table without altering the users table or exist
 
 ## Verification
 
-Run `python -m unittest discover -s tests -v` in this directory with project dependencies installed. The 33 tests include existing server/backup checks and recovery cases: legacy schema migration, password policy, allowlist, expiry/replay, simultaneous redemption, session revocation, preserved workspace data, provider failures, request/token throttling, sanitized errors, canonical origin, and backup exclusions. Local DOM checks also cover request/retry, mismatched confirmation, token removal, CSRF renewal, expired-link screens, and successful completion.
+Run `python -m unittest discover -s tests -v` in this directory with project dependencies installed. The tests include existing server/backup checks and recovery cases: legacy schema migration, password policy, allowlist, expiry/replay, simultaneous redemption, session revocation, preserved workspace data, provider failures, request/token throttling, sanitized errors, canonical origin, backup exclusions, and matching HTML/plain-text recovery links. Local DOM checks also cover request/retry, mismatched confirmation, token removal, CSRF renewal, expired-link screens, and successful completion.
 
 After deployment, use an enabled account to request one email, follow its link, set a new password, sign in, and verify the used link cannot reset it again. This final check uses the user's actual mailbox and a password chosen by the user.
 
