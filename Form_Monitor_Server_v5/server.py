@@ -16,6 +16,7 @@ from workspace import Workspace, read_json, write_json
 from server_google import WebOAuth
 from server_network import allowed_hosts, validate_url
 from backups import create_backup, backup_files
+from recovery import PasswordRecovery, REQUEST_MESSAGE
 
 ROOT=Path(__file__).resolve().parent
 class RunnerBusy(ValueError):pass
@@ -115,6 +116,7 @@ class ServerHub:
         self.workspaces={};self.lock=threading.RLock();self.runner=threading.Lock();self.stopping=False
         self.mutations=threading.RLock()
         self.backup_stop=threading.Event();self.backup_worker=None;self.backup_error=''
+        self.recovery=None
         # Schedules are restored for all accounts, without waiting for somebody to log in.
         with self.accounts.connect() as db:users=db.execute('SELECT id,email,owner FROM users').fetchall()
         for row in users:self.workspace(dict(id=row['id'],email=row['email'],owner=bool(row['owner'])))
@@ -168,6 +170,7 @@ class ServerHub:
             return self.workspaces[user['id']]
 
     def close(self):
+        if self.recovery:self.recovery.close()
         self.backup_stop.set()
         if self.backup_worker:self.backup_worker.join(timeout=10)
         with self.lock:
@@ -189,6 +192,7 @@ def create_app():
     if len(os.environ['FM_SETUP_CODE'])<24:raise RuntimeError('FM_SETUP_CODE must be at least 24 random characters.')
     allowed={x.strip().lower() for x in os.environ['FM_ALLOWED_EMAILS'].split(',') if x.strip()}
     hub=ServerHub(Path(os.environ['FM_STORAGE_ROOT']),origin)
+    hub.recovery=PasswordRecovery(hub.accounts,origin,allowed)
     app=Flask(__name__,static_folder=None);app.config['MAX_CONTENT_LENGTH']=8192;app.extensions['hub']=hub
     atexit.register(hub.close)
     cookie_name='__Host-fm_session'
@@ -211,7 +215,7 @@ def create_app():
             if request.headers.get('Origin')!=origin or request.headers.get('Sec-Fetch-Site')=='cross-site':return jsonify(error='Request origin rejected.'),403
             csrf=g.auth['csrf'] if g.auth else hub.accounts.public_csrf
             if not secrets.compare_digest(request.headers.get('X-CSRF-Token',''),csrf):return jsonify(error='Refresh the page and try again.'),403
-        if (request.path.startswith('/api/') and request.path not in ('/api/session','/api/login','/api/register')) or request.path.startswith('/evidence/') or request.path=='/oauth/google/callback':
+        if (request.path.startswith('/api/') and request.path not in ('/api/session','/api/login','/api/register','/api/password-reset/request','/api/password-reset/check','/api/password-reset/complete')) or request.path.startswith('/evidence/') or request.path=='/oauth/google/callback':
             if not g.auth:return jsonify(error='Please sign in.'),401
 
     @app.teardown_request
@@ -239,6 +243,21 @@ def create_app():
     def health():return jsonify(ok=True)
     @app.get('/api/session')
     def session():return jsonify(user=g.auth['user'] if g.auth else None,csrf=g.auth['csrf'] if g.auth else hub.accounts.public_csrf,setup_required=hub.accounts.setup_required())
+    @app.post('/api/password-reset/request')
+    def request_password_reset():
+        if not hub.recovery.available():
+            return jsonify(error='Password reset emails are temporarily unavailable. Please try again later.'),503
+        hub.recovery.request(data().get('email'))
+        return jsonify(ok=True,message=REQUEST_MESSAGE),202
+    @app.post('/api/password-reset/check')
+    def check_password_reset():
+        return jsonify(valid=hub.accounts.check_password_reset(data().get('token'),allowed))
+    @app.post('/api/password-reset/complete')
+    def complete_password_reset():
+        value=data()
+        email=hub.accounts.complete_password_reset(value.get('token'),value.get('password'),value.get('confirmation'),allowed)
+        hub.recovery.changed(email)
+        return cookie(jsonify(ok=True),'')
     @app.post('/api/register')
     @app.post('/api/login')
     def authenticate():
@@ -293,6 +312,7 @@ def create_app():
         if not path.is_file():return jsonify(error='Not found.'),404
         return send_file(path,mimetype='image/png')
     assets={'':'home.html','workspace':'index.html','login':'login.html','login.js':'login.js','login.css':'login.css','home.css':'home.css','home.js':'home.js','style.css':'style.css','app.js':'app.js','brand.css':'brand.css','logo.svg':'logo.svg','favicon.svg':'favicon.svg','instrument-regular.woff2':'instrument-regular.woff2','instrument-semibold.woff2':'instrument-semibold.woff2'}
+    assets.update({'forgot-password':'recovery.html','reset-password':'recovery.html','recovery.js':'recovery.js'})
     @app.get('/')
     @app.get('/<path:name>')
     def static_file(name=''):

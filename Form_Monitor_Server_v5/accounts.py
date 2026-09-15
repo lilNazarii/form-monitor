@@ -19,9 +19,12 @@ class Accounts:
         self.lock = threading.RLock()
         self.sessions = {}
         self.attempts = []
+        self.reset_attempts = []
         self.public_csrf = secrets.token_urlsafe(32)
         with self.connect() as db:
             db.execute('CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, email TEXT UNIQUE NOT NULL, salt BLOB NOT NULL, digest BLOB NOT NULL, owner INTEGER NOT NULL)')
+            db.execute('CREATE TABLE IF NOT EXISTS password_resets (token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL, password_digest BLOB NOT NULL, expires REAL NOT NULL)')
+            db.execute('DELETE FROM password_resets WHERE expires <= ?', (time.time(),))
         self.setup_code = secrets.token_urlsafe(18) if self.setup_required() else ''
 
     def connect(self):
@@ -107,3 +110,69 @@ class Accounts:
     def logout(self, token):
         with self.lock:
             self.sessions.pop(hashlib.sha256(token.encode()).hexdigest(), None)
+
+    def issue_password_reset(self, email, lifetime=900):
+        """Store only a random token's hash; requesting a link does not alter login."""
+        with self.lock, self.connect() as db:
+            now = time.time()
+            db.execute('DELETE FROM password_resets WHERE expires <= ?', (now,))
+            row = db.execute('SELECT id,digest FROM users WHERE email=?', (email,)).fetchone()
+            if row is None:
+                return None
+            token = secrets.token_urlsafe(32)
+            db.execute('INSERT INTO password_resets VALUES (?,?,?,?)',
+                       (hashlib.sha256(token.encode()).hexdigest(), row['id'], row['digest'], now+lifetime))
+            return token
+
+    def discard_password_reset(self, token):
+        with self.lock, self.connect() as db:
+            db.execute('DELETE FROM password_resets WHERE token_hash=?',
+                       (hashlib.sha256(token.encode()).hexdigest(),))
+
+    def reset_throttle(self):
+        # Independent of login and link requests, so requests cannot lock out login.
+        now = time.monotonic()
+        self.reset_attempts = [t for t in self.reset_attempts if now-t < 60]
+        if len(self.reset_attempts) >= 60:
+            raise ValueError('Too many attempts. Wait one minute and try again.')
+        self.reset_attempts.append(now)
+
+    @staticmethod
+    def reset_account(db, token, allowed):
+        if not isinstance(token, str) or not re.fullmatch(r'[A-Za-z0-9_-]{43}', token):
+            return None
+        row = db.execute('''SELECT users.id,users.email,users.digest,password_resets.password_digest
+            FROM password_resets JOIN users ON users.id=password_resets.user_id
+            WHERE token_hash=? AND expires>?''',
+            (hashlib.sha256(token.encode()).hexdigest(), time.time())).fetchone()
+        if (row is None or row['email'] not in allowed
+                or not hmac.compare_digest(bytes(row['digest']), bytes(row['password_digest']))):
+            return None
+        return row
+
+    def check_password_reset(self, token, allowed):
+        with self.lock, self.connect() as db:
+            self.reset_throttle()
+            return self.reset_account(db, token, allowed) is not None
+
+    def complete_password_reset(self, token, password, confirmation, allowed):
+        if not isinstance(password, str) or not 12 <= len(password) <= 256:
+            raise ValueError('Use between 12 and 256 characters for your password.')
+        if not isinstance(confirmation, str) or password != confirmation:
+            raise ValueError('Passwords do not match.')
+        with self.lock, self.connect() as db:
+            self.reset_throttle()
+            # Check, update, and consumption must be one transaction, including
+            # when more than one request or Accounts instance redeems a link.
+            db.execute('BEGIN IMMEDIATE')
+            row = self.reset_account(db, token, allowed)
+            if row is None:
+                raise ValueError('This reset link is invalid or has expired. Request a new one.')
+            salt = secrets.token_bytes(16)
+            digest = self.digest(password, salt)
+            db.execute('UPDATE users SET salt=?,digest=? WHERE id=?', (salt, digest, row['id']))
+            db.execute('DELETE FROM password_resets WHERE user_id=?', (row['id'],))
+            db.commit()
+            self.sessions = {key: value for key, value in self.sessions.items()
+                             if value['user']['id'] != row['id']}
+            return row['email']

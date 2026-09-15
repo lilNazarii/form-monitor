@@ -6,9 +6,9 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 
-def send_email(subject, text):
+def send_email(subject, text, *, recipient=None, sensitive=False):
     api_key = os.environ.get("RESEND_API_KEY", "").strip()
-    recipient = os.environ.get("ALERT_EMAIL", "").strip()
+    recipient = (os.environ.get("ALERT_EMAIL", "") if recipient is None else recipient).strip()
 
     if not api_key:
         raise RuntimeError("RESEND_API_KEY is not configured.")
@@ -16,7 +16,7 @@ def send_email(subject, text):
         raise RuntimeError("ALERT_EMAIL is not configured.")
 
     payload = {
-        "from": "Sentleaf <onboarding@resend.dev>",
+        "from": os.environ.get('FM_EMAIL_FROM', '').strip() or "Sentleaf <onboarding@resend.dev>",
         "to": [recipient],
         "subject": subject,
         "text": text,
@@ -38,6 +38,10 @@ def send_email(subject, text):
             result = json.load(response)
 
     except HTTPError as error:
+        if sensitive:
+            # Providers can echo request data in errors. Never expose a reset link.
+            error.close()
+            raise RuntimeError(f"Resend rejected the account email (HTTP {error.code}).") from None
         details = error.read().decode("utf-8", errors="replace")
         details = details.replace(api_key, "[REDACTED]")
         raise RuntimeError(
