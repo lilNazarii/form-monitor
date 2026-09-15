@@ -1,4 +1,5 @@
 import hashlib
+from html.parser import HTMLParser
 import io
 import json
 import os
@@ -17,7 +18,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from accounts import Accounts
 from backups import read_archive, restore_backup
 from email_sender import send_email
+from email_templates import password_reset_html
 from server import create_app
+
+class EmailLinks(HTMLParser):
+    def __init__(self, body):
+        super().__init__();self.links=[];self.tags=[]
+        self.feed(body)
+    def handle_starttag(self, tag, attrs):
+        self.tags.append(tag)
+        if tag=='a':self.links.append(dict(attrs)['href'])
 
 class RecoveryTests(unittest.TestCase):
     def setUp(self):
@@ -59,6 +69,8 @@ class RecoveryTests(unittest.TestCase):
         token,message=self.link('  OWNER@EXAMPLE.COM  ')
         self.assertEqual(message.kwargs['recipient'],'owner@example.com');self.assertTrue(message.kwargs['sensitive'])
         self.assertIn('https://beta.example/reset-password#token=',message.args[1]);self.assertIn('15 minutes',message.args[1])
+        link=f'https://beta.example/reset-password#token={token}'
+        self.assertEqual(EmailLinks(message.kwargs['html']).links,[link,link])
         self.assertTrue(self.check(token));self.assertTrue(self.check(token))
         r=self.complete(token);self.assertEqual(r.status_code,200,r.json);self.assertIn('Max-Age=0',r.headers['Set-Cookie'])
         self.assertIsNone(self.get(self.anon,'/api/session').json['user'])
@@ -69,6 +81,8 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(w.profiles[0]['id'],ident);self.assertEqual(w.oauth.store.load(connection)['refresh_token'],'test-refresh');self.assertIn(ident,w.due)
         self.hub.recovery.jobs.join();notices=[c for c in self.mail.call_args_list if c.args[0]=='[Sentleaf] Your password was changed']
         self.assertEqual(len(notices),1);self.assertNotIn(self.new_password,notices[0].args[1])
+        self.assertEqual(EmailLinks(notices[0].kwargs['html']).links,['https://beta.example/login'])
+        self.assertNotIn(self.new_password,notices[0].kwargs['html'])
 
     def test_unknown_unregistered_disabled_and_throttled_requests_have_same_response(self):
         r=self.post(self.anon,'/api/password-reset/request',{'email':'owner@example.com'})
@@ -191,9 +205,22 @@ class RecoveryTests(unittest.TestCase):
             send_email('Account reset','secret-reset-url',recipient='owner@example.com',sensitive=True)
         payload=json.loads(network.call_args.args[0].data)
         self.assertEqual(payload['to'],['owner@example.com']);self.assertEqual(payload['from'],'Sentleaf <onboarding@resend.dev>')
+        self.assertNotIn('html',payload)  # Existing plain-text alerts keep working.
+        html=password_reset_html('https://beta.example/reset-password#token=secret-reset-url')
+        with patch('email_sender.urlopen',return_value=io.BytesIO(b'{"id":"message-id"}')) as network,patch('builtins.print'):
+            send_email('Account reset','secret-reset-url',recipient='owner@example.com',sensitive=True,html=html)
+        payload=json.loads(network.call_args.args[0].data)
+        self.assertEqual(payload['html'],html);self.assertEqual(payload['text'],'secret-reset-url')
         failure=HTTPError('https://api.resend.com/emails',403,'Rejected',{},io.BytesIO(b'secret-reset-url fake-provider-key'))
         with patch('email_sender.urlopen',side_effect=failure):
-            with self.assertRaises(RuntimeError) as caught:send_email('Account reset','secret-reset-url',recipient='owner@example.com',sensitive=True)
+            with self.assertRaises(RuntimeError) as caught:send_email('Account reset','secret-reset-url',recipient='owner@example.com',sensitive=True,html=html)
         self.assertNotIn('secret-reset-url',str(caught.exception));self.assertNotIn('fake-provider-key',str(caught.exception))
+
+    def test_email_links_are_escaped_and_need_no_remote_assets(self):
+        link='https://beta.example/reset-password?x="<img src=x>&other=1#token=example'
+        html=password_reset_html(link);parsed=EmailLinks(html)
+        self.assertEqual(parsed.links,[link,link])
+        self.assertFalse(set(parsed.tags)&{'img','script','iframe','link','form'})
+        self.assertNotIn('<img src=x>',html)
 
 if __name__=='__main__':unittest.main()

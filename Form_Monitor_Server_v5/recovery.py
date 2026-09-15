@@ -8,6 +8,7 @@ import threading
 import time
 
 from email_sender import send_email
+from email_templates import password_changed_html, password_reset_html
 
 RESET_SECONDS = 15 * 60
 REQUEST_MESSAGE = ('If this email belongs to an enabled account, a reset link will arrive shortly. '
@@ -85,7 +86,7 @@ class PasswordRecovery:
                        'If you did not make this change, secure your email account and request a new password reset at:\n'
                        f'{self.origin}/forgot-password\n\n'
                        'Sentleaf will never ask you to send your password by email.',
-                       recipient=email, sensitive=True)
+                       recipient=email, sensitive=True, html=password_changed_html(self.origin))
             return
         token = self.accounts.issue_password_reset(email, RESET_SECONDS)
         if token is None:
@@ -100,7 +101,7 @@ class PasswordRecovery:
                        'This link expires in 15 minutes. It can be used once.\n\n'
                        'If you did not request this, you can ignore this email. Your password has not changed.\n\n'
                        'Sentleaf will never ask you to send your password by email.',
-                       recipient=email, sensitive=True)
+                       recipient=email, sensitive=True, html=password_reset_html(link))
         except Exception:
             self.accounts.discard_password_reset(token)
             raise
