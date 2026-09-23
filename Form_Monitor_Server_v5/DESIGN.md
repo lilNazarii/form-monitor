@@ -17,3 +17,15 @@ Keep operational identifiers stable: repository and app directory names, environ
 - Responsive layouts are specified for desktop, tablet, and narrow screens, with reduced-motion support and visible keyboard focus.
 
 Local synthetic QA fixtures are not part of the application or production routes.
+
+## Subscription release (September 2026)
+
+Refined warm-paper and evergreen direction, a new form reliability headline,
+launch pricing from the server catalog, and Plan & billing in the workspace.
+`refresh.css` contains the shared visual refresh; `plans.css` and `plans.js`
+serve the same two plans on the homepage and in the workspace. Payment
+unavailability and test mode are shown explicitly. Existing beta access and
+owner access are preserved while billing is off.
+
+See `BILLING_SETUP.md` for Stripe activation and the remaining public-release
+requirements. Test fixtures and local previews are never published.

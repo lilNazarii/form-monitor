@@ -56,6 +56,37 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(self.a.get('/api/state',base_url='https://evil.example').status_code,400)
         self.assertEqual(self.get(self.a,'/google_client.json').status_code,404)
         self.assertEqual(self.get(self.a,'/results/accounts.sqlite3').status_code,404)
+
+    def test_billing_public_catalog_and_protected_routes(self):
+        c=self.app.test_client()
+        catalog=self.get(c,'/api/plans')
+        self.assertEqual(catalog.status_code,200)
+        self.assertEqual(catalog.json['plans'][0]['amount'],500)
+        self.assertFalse(catalog.json['checkout_ready'])
+        self.assertNotIn('secret',catalog.get_data(as_text=True).lower())
+        for path in ('/api/billing/checkout','/api/billing/portal','/api/billing/trial','/api/billing/refresh'):
+            self.assertEqual(self.post(c,path,{}).status_code,401)
+            self.assertEqual(self.post(self.b,path,{},csrf='wrong').status_code,403)
+        self.assertEqual(self.post(self.b,'/api/billing/checkout',{'plan':'solo'}).status_code,503)
+        # A callback is session-independent but never signature-independent.
+        with patch.dict(os.environ,{'FM_BILLING_ENABLED':'1','STRIPE_SECRET_KEY':'sk_test_fixture',
+              'STRIPE_WEBHOOK_SECRET':'whsec_fixture','STRIPE_PRICE_SOLO':'price_solo','STRIPE_PRICE_STUDIO':'price_studio'}):
+            response=c.post('/api/billing/webhook',data=b'{}',base_url='https://beta.example')
+            self.assertEqual(response.status_code,400)
+            self.assertIn('signature',response.json['error'])
+            response=c.post('/api/billing/webhook',data=b'x'*262145,base_url='https://beta.example')
+            self.assertEqual(response.status_code,413)
+            self.assertEqual(self.post(self.b,'/api/billing/trial',{}).status_code,400)
+            self.connect(self.b,'second@gmail.example')
+            self.assertEqual(self.post(self.b,'/api/billing/trial',{}).status_code,200)
+            self.assertEqual(self.post(self.b,'/api/billing/trial',{}).status_code,400)
+
+    def test_billing_assets_and_off_state_preserve_workspace(self):
+        for path in ('/plans.js','/plans.css','/refresh.css'):
+            response=self.get(self.a,path)
+            self.assertEqual(response.status_code,200)
+        self.assertEqual(self.get(self.b,'/api/state').json['billing']['plan'],'beta')
+        self.assertEqual(self.get(self.a,'/api/state').json['billing']['plan'],'owner')
     def test_gmail_ownership_and_encryption(self):
         ident=self.connect(self.a,'owner@gmail.example')
         aw=self.workspace(self.a);self.assertEqual(aw.oauth.store.load(ident)['email'],'owner@gmail.example')
