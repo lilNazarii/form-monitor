@@ -116,3 +116,15 @@ entitlement. A portal downgrade does not delete monitors or history.
 Current limitation: per-instance runner and SQLite store; keep one Gunicorn
 worker and one Render instance. Server capacity and support costs still need
 measurement on external pilot sites before increasing customer volume.
+
+## Early-access requests
+
+The homepage now links to `/contact`. A visitor can request access, ask a product
+question, or submit a data request. Requests are stored in the existing database
+and shown only to the owner under Access requests. No email is sent, no account
+is created, and no website is authorized automatically. Review requests in the
+workspace; verify account ownership before handling data deletion. Requests
+expire after 90 days during normal housekeeping. Core backups can still contain
+previous records until their rotation; owner-downloaded copies need separate
+handling. The public `/privacy` page describes current behavior. It does not
+replace the complete operator identity and subscription terms needed at launch.

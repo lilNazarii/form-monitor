@@ -4,3 +4,5 @@
 @media(min-width:1500px){.hero{padding-block:92px}.hero h1{font-size:84px}}
 @media(max-width:1100px){.hero{gap:32px}.hero h1{font-size:64px;letter-spacing:-3.5px}}
 @media(max-width:760px){.launch-note{font-size:10px}.site-header{height:75px}.hero{grid-template-columns:1fr;padding-block:44px;gap:38px}.hero h1{font-size:clamp(49px,12.3vw,72px);letter-spacing:-2.8px}.hero h1>span{letter-spacing:-2.8px}.hero-description{font-size:15px}.hero-art{margin-top:8px}.hero-actions{gap:18px}.hero-mini-note{font-size:11px}.compatibility{padding:24px 18px}.receipt{transform:rotate(-1deg)}.hero-note{font-size:10px}}
+
+.footer-links{display:flex;gap:24px;flex-wrap:wrap}

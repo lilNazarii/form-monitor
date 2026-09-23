@@ -85,8 +85,36 @@ class ServerTests(unittest.TestCase):
         for path in ('/plans.js','/plans.css','/refresh.css'):
             response=self.get(self.a,path)
             self.assertEqual(response.status_code,200)
+            response.close()
         self.assertEqual(self.get(self.b,'/api/state').json['billing']['plan'],'beta')
         self.assertEqual(self.get(self.a,'/api/state').json['billing']['plan'],'owner')
+
+    def test_public_requests_require_consent_and_csrf_and_are_owner_only(self):
+        visitor=self.app.test_client()
+        value=dict(email='visitor@example.com',website='https://example.com/contact',kind='access',message='One form',consent=True)
+        self.assertEqual(self.post(visitor,'/api/inquiries',value,csrf='bad').status_code,403)
+        self.assertEqual(self.post(visitor,'/api/inquiries',dict(value,consent=False)).status_code,400)
+        self.assertEqual(self.post(visitor,'/api/inquiries',value).status_code,202)
+        self.assertEqual(self.post(visitor,'/api/inquiries',value).status_code,202)
+        requests=self.get(self.a,'/api/state').json['inquiries']
+        self.assertEqual(len(requests),1)
+        self.assertEqual(requests[0]['email'],'visitor@example.com')
+        self.assertNotIn('inquiries',self.get(self.b,'/api/state').json)
+        self.assertEqual(self.get(visitor,'/api/state').status_code,401)
+        self.assertEqual(self.post(self.b,'/api/inquiries/delete',{'id':requests[0]['id']}).status_code,403)
+        self.assertEqual(self.post(self.a,'/api/inquiries/delete',{'id':requests[0]['id']}).status_code,200)
+        self.assertEqual(self.get(self.a,'/api/state').json['inquiries'],[])
+
+    def test_inquiries_honeypot_retention_and_url_validation(self):
+        value=dict(email='visitor@example.com',website='',kind='data',message='Please delete my data',consent=True)
+        self.hub.inquiries.submit(dict(value,company_fax='bot'))
+        self.assertEqual(self.hub.inquiries.listing(),[])
+        for url in ('javascript:alert(1)','https://user:password@example.com','https://example.com/?token=secret'):
+            with self.assertRaises(ValueError):self.hub.inquiries.submit(dict(value,website=url))
+        self.hub.inquiries.submit(value)
+        with self.hub.accounts.connect() as db:
+            db.execute('UPDATE inquiries SET created=?',(time.time()-91*86400,))
+        self.assertEqual(self.hub.inquiries.listing(),[])
     def test_gmail_ownership_and_encryption(self):
         ident=self.connect(self.a,'owner@gmail.example')
         aw=self.workspace(self.a);self.assertEqual(aw.oauth.store.load(ident)['email'],'owner@gmail.example')

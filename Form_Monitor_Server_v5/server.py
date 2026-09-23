@@ -18,6 +18,7 @@ from server_network import allowed_hosts, validate_url
 from backups import create_backup, backup_files
 from recovery import PasswordRecovery, REQUEST_MESSAGE
 from billing import Billing, BillingUnavailable, BillingAccessError, DailyLimit
+from inquiries import Inquiries
 
 ROOT=Path(__file__).resolve().parent
 class RunnerBusy(ValueError):pass
@@ -129,6 +130,7 @@ class ServerHub:
     def __init__(self,root,origin):
         self.root=root;self.origin=origin;self.accounts=Accounts(root)
         self.billing=Billing(self.accounts,origin)
+        self.inquiries=Inquiries(self.accounts)
         if self.accounts.setup_required():self.accounts.setup_code=os.environ['FM_SETUP_CODE']
         self.workspaces={};self.lock=threading.RLock();self.runner=threading.Lock();self.stopping=False
         self.mutations=threading.RLock()
@@ -163,6 +165,7 @@ class ServerHub:
     def backup_loop(self):
         while not self.backup_stop.is_set():
             try:
+                self.inquiries.prune()
                 latest=self.backup_status()['latest']
                 if not self.accounts.setup_required() and (latest is None or time.time()-latest>=86400):
                     self.backup()
@@ -245,7 +248,7 @@ def create_app():
             if request.headers.get('Origin')!=origin or request.headers.get('Sec-Fetch-Site')=='cross-site':return jsonify(error='Request origin rejected.'),403
             csrf=g.auth['csrf'] if g.auth else hub.accounts.public_csrf
             if not secrets.compare_digest(request.headers.get('X-CSRF-Token',''),csrf):return jsonify(error='Refresh the page and try again.'),403
-        if (request.path.startswith('/api/') and request.path not in ('/api/plans','/api/session','/api/login','/api/register','/api/password-reset/request','/api/password-reset/check','/api/password-reset/complete')) or request.path.startswith('/evidence/') or request.path=='/oauth/google/callback':
+        if (request.path.startswith('/api/') and request.path not in ('/api/inquiries','/api/plans','/api/session','/api/login','/api/register','/api/password-reset/request','/api/password-reset/check','/api/password-reset/complete')) or request.path.startswith('/evidence/') or request.path=='/oauth/google/callback':
             if not g.auth:return jsonify(error='Please sign in.'),401
 
     @app.teardown_request
@@ -277,6 +280,15 @@ def create_app():
     def session():return jsonify(user=g.auth['user'] if g.auth else None,csrf=g.auth['csrf'] if g.auth else hub.accounts.public_csrf,setup_required=hub.accounts.setup_required())
     @app.get('/api/plans')
     def plans():return jsonify(hub.billing.catalog())
+    @app.post('/api/inquiries')
+    def submit_inquiry():
+        hub.inquiries.submit(data())
+        return jsonify(ok=True,message='Your request has been saved for review. This does not create an account or start a subscription.'),202
+    @app.post('/api/inquiries/delete')
+    def delete_inquiry():
+        if not g.auth['user']['owner']:return jsonify(error='Only the owner can manage requests.'),403
+        hub.inquiries.delete(data().get('id'))
+        return jsonify(ok=True)
     @app.post('/api/password-reset/request')
     def request_password_reset():
         if not hub.recovery.available():
@@ -306,6 +318,7 @@ def create_app():
     def state():
         value=workspace().snapshot();value['csrf']=g.auth['csrf']
         value['billing']=hub.billing.state(g.auth['user'])
+        if g.auth['user']['owner']:value['inquiries']=hub.inquiries.listing()
         if g.auth['user']['owner']:value['backups']=hub.backup_status()
         return jsonify(value)
     @app.post('/api/billing/trial')
@@ -366,6 +379,7 @@ def create_app():
         return send_file(path,mimetype='image/png')
     assets={'':'home.html','workspace':'index.html','login':'login.html','login.js':'login.js','login.css':'login.css','home.css':'home.css','home.js':'home.js','style.css':'style.css','app.js':'app.js','brand.css':'brand.css','logo.svg':'logo.svg','favicon.svg':'favicon.svg','instrument-regular.woff2':'instrument-regular.woff2','instrument-semibold.woff2':'instrument-semibold.woff2'}
     assets.update({'forgot-password':'recovery.html','reset-password':'recovery.html','recovery.js':'recovery.js'})
+    assets.update({'contact':'contact.html','privacy':'privacy.html','contact.js':'contact.js','contact.css':'contact.css'})
     assets.update({'plans.js':'plans.js','plans.css':'plans.css','refresh.css':'refresh.css'})
     @app.get('/')
     @app.get('/<path:name>')
