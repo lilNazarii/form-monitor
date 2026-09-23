@@ -17,6 +17,7 @@ from server_google import WebOAuth
 from server_network import allowed_hosts, validate_url
 from backups import create_backup, backup_files
 from recovery import PasswordRecovery, REQUEST_MESSAGE
+from billing import Billing, BillingUnavailable, BillingAccessError, DailyLimit
 
 ROOT=Path(__file__).resolve().parent
 class RunnerBusy(ValueError):pass
@@ -51,7 +52,7 @@ class ServerWorkspace(Workspace):
     def environment_for_run(self,p,runtime):
         env=super().environment_for_run(p,runtime)
         # Never inherit global mailbox credentials or tunnel credentials by default.
-        for key in ('GMAIL_ADDRESS','GMAIL_APP_PASSWORD','LIVE_LINK_USER','LIVE_LINK_PASSWORD'):
+        for key in ('GMAIL_ADDRESS','GMAIL_APP_PASSWORD','LIVE_LINK_USER','LIVE_LINK_PASSWORD','STRIPE_SECRET_KEY','STRIPE_WEBHOOK_SECRET'):
             env.pop(key,None)
         address=urlsplit(p['url'])
         if (address.scheme=='https' and address.port in (None,443)
@@ -62,11 +63,13 @@ class ServerWorkspace(Workspace):
         return env
 
     def save(self,data):
+        self.hub.billing.check(self.user,self.profiles,data=data)
         validate_url(str(data.get('url','')))
         if not data.get('connection_id'):raise ValueError('Choose your connected Gmail account.')
         ident=super().save(data);self.persist_schedule();return ident
 
     def ready(self,p):
+        self.hub.billing.check(self.user,self.profiles,profile=p)
         validate_url(p['url'])
         if not p.get('connection_id'):raise ValueError('Connect Gmail and choose it in Edit settings.')
         host=urlsplit(p['url']).hostname
@@ -88,7 +91,12 @@ class ServerWorkspace(Workspace):
 
     def run(self,ident):
         if not self.hub.runner.acquire(blocking=False):raise RunnerBusy('A check is running on the server. Try again shortly.')
-        try:super().run(ident)
+        try:
+            with self.lock:
+                if self.stop or self.active or self.oauth.pending:raise ValueError('Wait for the current operation to finish.')
+                self.ready(self.profile(ident))
+                self.hub.billing.reserve_run(self.user)
+                super().run(ident)
         except BaseException:
             self.hub.runner.release();raise
 
@@ -105,6 +113,14 @@ class ServerWorkspace(Workspace):
                     if self.due[ident]<=time.time():
                         try:self.run(ident)
                         except RunnerBusy:pass
+                        except DailyLimit as error:
+                            self.last_errors[ident]=str(error)
+                            self.due[ident]=(int(time.time()//86400)+1)*86400+5
+                            self.persist_schedule()
+                        except BillingAccessError as error:
+                            self.last_errors[ident]=str(error)
+                            self.due[ident]=time.time()+600
+                            self.persist_schedule()
                         except ValueError as error:
                             self.last_errors[ident]=str(error);self.due.pop(ident,None);self.persist_schedule()
             self.wake.wait(1);self.wake.clear()
@@ -112,6 +128,7 @@ class ServerWorkspace(Workspace):
 class ServerHub:
     def __init__(self,root,origin):
         self.root=root;self.origin=origin;self.accounts=Accounts(root)
+        self.billing=Billing(self.accounts,origin)
         if self.accounts.setup_required():self.accounts.setup_code=os.environ['FM_SETUP_CODE']
         self.workspaces={};self.lock=threading.RLock();self.runner=threading.Lock();self.stopping=False
         self.mutations=threading.RLock()
@@ -170,6 +187,7 @@ class ServerHub:
             return self.workspaces[user['id']]
 
     def close(self):
+        self.billing.close()
         if self.recovery:self.recovery.close()
         self.backup_stop.set()
         if self.backup_worker:self.backup_worker.join(timeout=10)
@@ -213,6 +231,11 @@ def create_app():
             if render_host and request.host.lower()==render_host and request.method in ('GET','HEAD') and request.path in redirect_pages:
                 return redirect(origin+request.path,code=302)
             return jsonify(error='Unexpected host.'),400
+        # Provider callbacks authenticate their untouched body with Stripe signatures.
+        # No other API route is exempt from browser session/origin/CSRF checks.
+        if request.path=='/api/billing/webhook' and request.method=='POST':
+            request.max_content_length=262144
+            return None
         if request.method=='POST' or request.path=='/oauth/google/callback':
             hub.mutations.acquire();g.mutation_lock=True
         g.auth=hub.accounts.session(current_token())
@@ -222,7 +245,7 @@ def create_app():
             if request.headers.get('Origin')!=origin or request.headers.get('Sec-Fetch-Site')=='cross-site':return jsonify(error='Request origin rejected.'),403
             csrf=g.auth['csrf'] if g.auth else hub.accounts.public_csrf
             if not secrets.compare_digest(request.headers.get('X-CSRF-Token',''),csrf):return jsonify(error='Refresh the page and try again.'),403
-        if (request.path.startswith('/api/') and request.path not in ('/api/session','/api/login','/api/register','/api/password-reset/request','/api/password-reset/check','/api/password-reset/complete')) or request.path.startswith('/evidence/') or request.path=='/oauth/google/callback':
+        if (request.path.startswith('/api/') and request.path not in ('/api/plans','/api/session','/api/login','/api/register','/api/password-reset/request','/api/password-reset/check','/api/password-reset/complete')) or request.path.startswith('/evidence/') or request.path=='/oauth/google/callback':
             if not g.auth:return jsonify(error='Please sign in.'),401
 
     @app.teardown_request
@@ -236,6 +259,8 @@ def create_app():
 
     @app.errorhandler(ValueError)
     def invalid(error):return jsonify(error=str(error)),400
+    @app.errorhandler(BillingUnavailable)
+    def billing_unavailable(error):return jsonify(error=str(error)),503
     @app.errorhandler(413)
     def oversized(error):return jsonify(error='Request is too large.'),413
     @app.errorhandler(500)
@@ -250,6 +275,8 @@ def create_app():
     def health():return jsonify(ok=True)
     @app.get('/api/session')
     def session():return jsonify(user=g.auth['user'] if g.auth else None,csrf=g.auth['csrf'] if g.auth else hub.accounts.public_csrf,setup_required=hub.accounts.setup_required())
+    @app.get('/api/plans')
+    def plans():return jsonify(hub.billing.catalog())
     @app.post('/api/password-reset/request')
     def request_password_reset():
         if not hub.recovery.available():
@@ -278,8 +305,27 @@ def create_app():
     @app.get('/api/state')
     def state():
         value=workspace().snapshot();value['csrf']=g.auth['csrf']
+        value['billing']=hub.billing.state(g.auth['user'])
         if g.auth['user']['owner']:value['backups']=hub.backup_status()
         return jsonify(value)
+    @app.post('/api/billing/trial')
+    def billing_trial():
+        if not any(a['available'] for a in workspace().oauth.store.listing()):
+            raise ValueError('Connect Gmail first so you can use the full trial.')
+        return jsonify(ok=True,billing=hub.billing.start_trial(g.auth['user']))
+    @app.post('/api/billing/checkout')
+    def billing_checkout():
+        return jsonify(url=hub.billing.checkout(g.auth['user'],data().get('plan')))
+    @app.post('/api/billing/portal')
+    def billing_portal():return jsonify(url=hub.billing.portal(g.auth['user']))
+    @app.post('/api/billing/refresh')
+    def billing_refresh():
+        hub.billing.sync(g.auth['user']['id'])
+        return jsonify(ok=True,billing=hub.billing.state(g.auth['user']))
+    @app.post('/api/billing/webhook')
+    def billing_webhook():
+        hub.billing.webhook(request.get_data(),request.headers.get('Stripe-Signature',''))
+        return jsonify(received=True)
     @app.post('/api/backups/download')
     def download_backup():
         if not g.auth['user']['owner']:return jsonify(error='Only the server owner can download backups.'),403
@@ -320,6 +366,7 @@ def create_app():
         return send_file(path,mimetype='image/png')
     assets={'':'home.html','workspace':'index.html','login':'login.html','login.js':'login.js','login.css':'login.css','home.css':'home.css','home.js':'home.js','style.css':'style.css','app.js':'app.js','brand.css':'brand.css','logo.svg':'logo.svg','favicon.svg':'favicon.svg','instrument-regular.woff2':'instrument-regular.woff2','instrument-semibold.woff2':'instrument-semibold.woff2'}
     assets.update({'forgot-password':'recovery.html','reset-password':'recovery.html','recovery.js':'recovery.js'})
+    assets.update({'plans.js':'plans.js','plans.css':'plans.css','refresh.css':'refresh.css'})
     @app.get('/')
     @app.get('/<path:name>')
     def static_file(name=''):
@@ -327,4 +374,5 @@ def create_app():
         if name not in assets:return jsonify(error='Not found.'),404
         return send_file(ROOT/'dashboard_assets'/assets[name])
     hub.start_backups()
+    hub.billing.start()
     return app

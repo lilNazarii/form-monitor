@@ -1,5 +1,5 @@
 'use strict';
-if (/^#(?:monitors|history|notifications|connections|connect|monitor\/[a-f0-9]{32})$/.test(location.hash)) {
+if (/^#(?:monitors|history|notifications|connections|billing(?:\/return)?|connect|monitor\/[a-f0-9]{32})$/.test(location.hash)) {
   location.replace('/workspace' + location.hash);
 }
 const example=document.getElementById('example-check');
