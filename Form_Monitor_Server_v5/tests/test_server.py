@@ -17,7 +17,7 @@ from transfer import export_data, import_data
 class ServerTests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.root=Path(self.temp.name)
-        self.env=patch.dict(os.environ,{'FM_BACKUPS_ENABLED':'0','FM_PUBLIC_URL':'https://beta.example','FM_STORAGE_ROOT':str(self.root),'FM_SETUP_CODE':'test-owner-code-that-is-long-enough','FM_ENCRYPTION_KEY':secrets.token_hex(32),'FM_ALLOWED_EMAILS':'owner@example.com,second@example.com','FM_ALLOWED_FORM_HOSTS':'forms.example','GOOGLE_CLIENT_ID':'test.apps.googleusercontent.com','GOOGLE_CLIENT_SECRET':'fake','RESEND_API_KEY':'fake'},clear=False);self.env.start()
+        self.env=patch.dict(os.environ,{'FM_TRIALS_ENABLED':'0','FM_BACKUPS_ENABLED':'0','FM_PUBLIC_URL':'https://beta.example','FM_STORAGE_ROOT':str(self.root),'FM_SETUP_CODE':'test-owner-code-that-is-long-enough','FM_ENCRYPTION_KEY':secrets.token_hex(32),'FM_ALLOWED_EMAILS':'owner@example.com,second@example.com','FM_ALLOWED_FORM_HOSTS':'forms.example','GOOGLE_CLIENT_ID':'test.apps.googleusercontent.com','GOOGLE_CLIENT_SECRET':'fake','RESEND_API_KEY':'fake'},clear=False);self.env.start()
         self.render_env=patch.dict(os.environ,{'RENDER_EXTERNAL_HOSTNAME':'legacy.onrender.com'});self.render_env.start()
         self.addCleanup(self.render_env.stop)
         self.app=create_app();self.app.testing=True;self.hub=self.app.extensions['hub']
@@ -161,6 +161,8 @@ class ServerTests(unittest.TestCase):
     def test_form_evidence_and_schedule_isolation(self):
         connection=self.connect(self.a,'owner@gmail.example');ident=self.profile(self.a,connection);aw=self.workspace(self.a)
         run='MONITOR-'+'b'*32;folder=aw.root/'results/monitors'/ident/'reports'/run;folder.mkdir(parents=True);(folder/'page.png').write_bytes(b'owner screenshot')
+        from datetime import datetime, timezone
+        (folder/'report.json').write_text(json.dumps(dict(started_utc=datetime.now(timezone.utc).isoformat())))
         response=self.get(self.a,f'/evidence/{ident}/{run}/page.png');self.assertEqual(response.data,b'owner screenshot');response.close()
         self.assertEqual(self.get(self.b,f'/evidence/{ident}/{run}/page.png').status_code,404)
         self.assertEqual(self.post(self.b,'/api/delete',dict(id=ident)).status_code,400)

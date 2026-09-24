@@ -96,7 +96,7 @@ a five-minute tolerance; accepted event IDs are retained for 90 days. A
 ten-minute reconciliation loop repairs missed delivery. It grants no access
 past a recorded period end when the provider cannot be reached.
 
-Disabled billing preserves the existing private beta; it does **not** cancel
+Disabled billing with FM_TRIALS_ENABLED=0 preserves the legacy private beta; it does **not** cancel
 Stripe subscriptions. Do not use `FM_BILLING_ENABLED=0` as a cancellation tool.
 If rollback is required after live sales, retain the webhook/reconciliation
 service or resolve subscriptions in Stripe before disabling it.
@@ -128,3 +128,30 @@ expire after 90 days during normal housekeeping. Core backups can still contain
 previous records until their rotation; owner-downloaded copies need separate
 handling. The public `/privacy` page describes current behavior. It does not
 replace the complete operator identity and subscription terms needed at launch.
+
+## September 24 experience release
+
+Trials are now independent from paid Checkout. `FM_TRIALS_ENABLED` defaults to
+`1`; an approved non-owner account can start its single seven-day, one-form trial
+after connecting Gmail even while `FM_BILLING_ENABLED=0`. The owner retains access.
+The existing email and website allowlists stay enforced. `/trial` clearly requests
+review; it does not create an account or start the trial clock. Registration and
+site approval remain operator tasks using the existing allowlists. No real
+payment switch is enabled by this release.
+
+Solo includes seven days of history. Studio includes 90 days, client/site groups,
+paginated history, CSV export and calendar-week reports inside the workspace.
+Weekly reports use existing completed-cycle events; retries are not counted as
+separate cycles. They are not an email subscription and claim no continuous uptime.
+History windows also apply to screenshot URLs. Downgrades do not delete records;
+an expired paid account retains read access to its last plan's history window.
+Exports contain check metadata, not Gmail message contents, and escape spreadsheet
+formula prefixes. All routes operate on the authenticated user's workspace.
+
+Legacy Stripe customer records are identified against the active API mode before
+use. Unknown-mode paid records never grant paid entitlement. A customer missing
+in the current mode is archived before resetting that mode's billing state.
+Known-mode archived records are restored when switching back, preventing duplicate
+customers/subscriptions. Provider failures leave records intact. Trial expiry is
+preserved across mode changes. Database migrations are additive; archives are
+included in the existing encrypted core backups.

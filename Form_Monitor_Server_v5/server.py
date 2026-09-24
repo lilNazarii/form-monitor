@@ -19,6 +19,7 @@ from backups import create_backup, backup_files
 from recovery import PasswordRecovery, REQUEST_MESSAGE
 from billing import Billing, BillingUnavailable, BillingAccessError, DailyLimit
 from inquiries import Inquiries
+from reporting import weekly_summary, history_csv, timestamp
 
 ROOT=Path(__file__).resolve().parent
 class RunnerBusy(ValueError):pass
@@ -64,6 +65,9 @@ class ServerWorkspace(Workspace):
         return env
 
     def save(self,data):
+        if data.get('group') and not self.hub.billing.state(self.user)['features']['groups']:
+            previous = self.profile(data['id']).get('group','') if data.get('id') else ''
+            if data['group'] != previous:raise ValueError('Client groups are included in Studio.')
         self.hub.billing.check(self.user,self.profiles,data=data)
         validate_url(str(data.get('url','')))
         if not data.get('connection_id'):raise ValueError('Choose your connected Gmail account.')
@@ -316,11 +320,38 @@ def create_app():
         hub.accounts.logout(current_token());return cookie(jsonify(ok=True),'')
     @app.get('/api/state')
     def state():
-        value=workspace().snapshot();value['csrf']=g.auth['csrf']
-        value['billing']=hub.billing.state(g.auth['user'])
+        access=hub.billing.state(g.auth['user'])
+        value=workspace().snapshot(history_days=access['history_days']);value['csrf']=g.auth['csrf']
+        value['billing']=access
         if g.auth['user']['owner']:value['inquiries']=hub.inquiries.listing()
         if g.auth['user']['owner']:value['backups']=hub.backup_status()
         return jsonify(value)
+    @app.get('/api/history')
+    def history():
+        try:page=max(0,int(request.args.get('page','0')))
+        except ValueError:raise ValueError('Choose a valid history page.')
+        access=hub.billing.state(g.auth['user'])
+        rows=workspace().snapshot(history_days=access['history_days'],report_limit=None)['reports']
+        ident=request.args.get('monitor','')
+        if ident:rows=[r for r in rows if r['profile_id']==ident]
+        return jsonify(reports=rows[page*50:(page+1)*50],total=len(rows),page=page,page_size=50)
+    @app.get('/api/history.csv')
+    def export_history():
+        access=hub.billing.state(g.auth['user'])
+        if not access['features']['csv_export']:return jsonify(error='CSV export is included in Studio.'),403
+        rows=workspace().snapshot(history_days=access['history_days'],report_limit=None)['reports']
+        ident=request.args.get('monitor','')
+        if ident:rows=[r for r in rows if r['profile_id']==ident]
+        return send_file(io.BytesIO(history_csv(rows).encode('utf-8')),mimetype='text/csv',
+                         as_attachment=True,download_name='sentleaf-check-history.csv')
+    @app.get('/api/reports/weekly')
+    def weekly_report():
+        access=hub.billing.state(g.auth['user'])
+        if not access['features']['weekly_report']:return jsonify(error='Weekly reports are included in Studio.'),403
+        try:weeks=int(request.args.get('weeks_ago','0'))
+        except ValueError:raise ValueError('Choose a valid week.')
+        if not 0<=weeks<=11:raise ValueError('Choose one of the last 12 weeks.')
+        return jsonify(weekly_summary(workspace().snapshot(history_days=90,event_limit=None),weeks))
     @app.post('/api/billing/trial')
     def billing_trial():
         if not any(a['available'] for a in workspace().oauth.store.listing()):
@@ -376,14 +407,19 @@ def create_app():
         if not re.fullmatch('[a-f0-9]{32}',ident) or not re.fullmatch('MONITOR-[a-f0-9]{32}',run) or not any(p['id']==ident for p in w.profiles):return jsonify(error='Not found.'),404
         path=w.root/'results/monitors'/ident/'reports'/run/'page.png'
         if not path.is_file():return jsonify(error='Not found.'),404
+        report=read_json(path.parent/'report.json',{})
+        if timestamp(report.get('started_utc')) < time.time()-hub.billing.state(g.auth['user'])['history_days']*86400:
+            return jsonify(error='This screenshot is outside your plan’s history window.'),404
         return send_file(path,mimetype='image/png')
     assets={'':'home.html','workspace':'index.html','login':'login.html','login.js':'login.js','login.css':'login.css','home.css':'home.css','home.js':'home.js','style.css':'style.css','app.js':'app.js','brand.css':'brand.css','logo.svg':'logo.svg','favicon.svg':'favicon.svg','instrument-regular.woff2':'instrument-regular.woff2','instrument-semibold.woff2':'instrument-semibold.woff2'}
     assets.update({'forgot-password':'recovery.html','reset-password':'recovery.html','recovery.js':'recovery.js'})
     assets.update({'contact':'contact.html','privacy':'privacy.html','contact.js':'contact.js','contact.css':'contact.css'})
+    assets['trial']='trial.html'
     assets.update({'plans.js':'plans.js','plans.css':'plans.css','refresh.css':'refresh.css'})
     @app.get('/')
     @app.get('/<path:name>')
     def static_file(name=''):
+        if name=='trial' and g.auth:return redirect('/workspace#billing',code=303)
         if name=='workspace' and not g.auth:return redirect('/login',code=303)
         if name not in assets:return jsonify(error='Not found.'),404
         return send_file(ROOT/'dashboard_assets'/assets[name])

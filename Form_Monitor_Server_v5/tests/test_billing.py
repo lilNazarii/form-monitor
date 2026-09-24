@@ -57,7 +57,7 @@ class BillingTests(unittest.TestCase):
                      'data':{'object':{'customer':'cus_test','status':'active'}}}, **override)
 
     def test_disabled_preserves_beta_and_owner_access(self):
-        with patch.dict(os.environ, {'FM_BILLING_ENABLED':'0'}):
+        with patch.dict(os.environ, {'FM_BILLING_ENABLED':'0','FM_TRIALS_ENABLED':'0'}):
             self.assertTrue(self.billing.state(self.user)['active'])
             self.assertEqual(self.billing.state(self.user)['plan'], 'beta')
             with self.assertRaises(BillingUnavailable):self.billing.checkout(self.user, 'solo')
