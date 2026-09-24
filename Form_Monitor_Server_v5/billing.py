@@ -9,8 +9,10 @@ from urllib.parse import urlsplit
 import stripe
 
 PLANS = {
-    'solo': dict(name='Solo', amount=500, currency='eur', monitors=1, interval=360),
-    'studio': dict(name='Studio', amount=1200, currency='eur', monitors=5, interval=360),
+    'solo': dict(name='Solo', amount=500, currency='eur', monitors=1, interval=360,
+                 history_days=7, groups=False, csv_export=False, weekly_report=False),
+    'studio': dict(name='Studio', amount=1200, currency='eur', monitors=5, interval=360,
+                   history_days=90, groups=True, csv_export=True, weekly_report=True),
 }
 TRIAL_DAYS = 7
 TERMINAL = {'canceled', 'incomplete_expired'}
@@ -49,6 +51,19 @@ class Billing:
                 checkout_key TEXT, checkout_plan TEXT, checkout_started REAL)''')
             db.execute('CREATE TABLE IF NOT EXISTS billing_events (id TEXT PRIMARY KEY, received REAL NOT NULL)')
             db.execute('CREATE TABLE IF NOT EXISTS billing_usage (user_id TEXT, day INTEGER, runs INTEGER NOT NULL, PRIMARY KEY(user_id,day))')
+            columns = {r['name'] for r in db.execute('PRAGMA table_info(billing)')}
+            if 'stripe_mode' not in columns:
+                db.execute("ALTER TABLE billing ADD COLUMN stripe_mode TEXT NOT NULL DEFAULT 'legacy'")
+            db.execute('''CREATE TABLE IF NOT EXISTS billing_mode_archive (
+                user_id TEXT, stripe_mode TEXT, record TEXT, archived REAL)''')
+
+    @staticmethod
+    def trials_enabled():
+        return os.environ.get('FM_TRIALS_ENABLED', '1') == '1'
+
+    @classmethod
+    def mode(cls):
+        return 'live' if cls.key().startswith(('sk_live_', 'rk_live_')) else 'test'
 
     @staticmethod
     def enabled():
@@ -71,11 +86,12 @@ class Billing:
     def catalog(cls):
         return dict(plans=[dict(id=k, **v) for k, v in PLANS.items()], trial_days=TRIAL_DAYS,
                     checkout_ready=cls.configured(), billing_enabled=cls.enabled(),
+                    trials_enabled=cls.trials_enabled(), access_review_required=True,
                     test_mode=not cls.key().startswith(('sk_live_', 'rk_live_')))
 
     def row(self, user_id):
         with self.accounts.connect() as db:
-            db.execute('INSERT OR IGNORE INTO billing (user_id) VALUES (?)', (user_id,))
+            db.execute('INSERT OR IGNORE INTO billing (user_id,stripe_mode) VALUES (?,?)', (user_id,self.mode()))
             return dict(db.execute('SELECT * FROM billing WHERE user_id=?', (user_id,)).fetchone())
 
     def update(self, user_id, **values):
@@ -89,9 +105,9 @@ class Billing:
         now = time.time()
         if user['owner']:
             plan, label, limit, interval, active = 'owner', 'Owner workspace', 20, 15, True
-        elif not self.enabled():
+        elif not self.enabled() and not self.trials_enabled():
             plan, label, limit, interval, active = 'beta', 'Private beta', 20, 15, True
-        elif row['status'] in ('active', 'trialing') and row['plan'] in PLANS and row['period_end'] > now:
+        elif row['stripe_mode'] == self.mode() and row['status'] in ('active', 'trialing') and row['plan'] in PLANS and row['period_end'] > now:
             plan = row['plan']; label = PLANS[plan]['name']
             limit, interval, active = PLANS[plan]['monitors'], PLANS[plan]['interval'], True
         elif row['status'] == 'none' and row['trial_end'] > now:
@@ -101,17 +117,22 @@ class Billing:
         day = int(now // 86400)
         with self.accounts.connect() as db:
             usage = db.execute('SELECT runs FROM billing_usage WHERE user_id=? AND day=?', (user['id'],day)).fetchone()
+        features = PLANS.get(plan, PLANS['studio'] if plan in ('owner','beta') else PLANS['solo'])
+        # Existing history remains readable after expiry, within the last plan's window.
+        history_days = PLANS.get(row['plan'], features)['history_days'] if not active else features['history_days']
         return dict(plan=plan, label=label, monitor_limit=limit, minimum_interval=interval,
+                    history_days=history_days,
+                    features={k:bool(active and features[k]) for k in ('groups','csv_export','weekly_report')},
                     daily_limit=limit*6 if plan not in ('owner','beta') else None,
                     runs_today=usage['runs'] if usage else 0,
                     active=active, status=row['status'], period_end=row['period_end'],
                     cancel_at=row['cancel_at'], trial_end=row['trial_end'],
-                    trial_available=self.enabled() and not user['owner'] and not row['trial_end']
+                    trial_available=(self.enabled() or self.trials_enabled()) and not user['owner'] and not row['trial_end']
                                     and row['status'] == 'none',
                     can_manage=bool(row['customer_id'] and self.configured()), **self.catalog())
 
     def start_trial(self, user):
-        if not self.enabled() or user['owner']:
+        if not (self.enabled() or self.trials_enabled()) or user['owner']:
             raise ValueError('This workspace already has access.')
         with self.lock:
             row = self.row(user['id'])
@@ -167,6 +188,50 @@ class Billing:
         if not self.configured():
             raise BillingUnavailable('Payments are not open yet. Your existing workspace access is unchanged.')
 
+    def ensure_customer_mode(self, user_id):
+        """Never carry sandbox entitlements or customer IDs into live Checkout."""
+        import json
+        row = self.row(user_id)
+        if row['stripe_mode'] == self.mode():
+            return row
+        # Restore a previously identified mode instead of creating duplicate customers
+        # when a deployment switches from live to test and back.
+        with self.accounts.connect() as db:
+            saved = db.execute('''SELECT record FROM billing_mode_archive
+                WHERE user_id=? AND stripe_mode=? ORDER BY archived DESC LIMIT 1''',
+                (user_id,self.mode())).fetchone()
+            if saved:
+                db.execute('INSERT INTO billing_mode_archive VALUES (?,?,?,?)',
+                           (user_id,row['stripe_mode'],json.dumps(row),time.time()))
+                restored = json.loads(saved['record'])
+                restored.pop('user_id',None)
+                # A free trial belongs to the account, across provider modes.
+                restored['trial_end'] = max(row['trial_end'],restored.get('trial_end',0))
+                db.execute('UPDATE billing SET '+','.join(k+'=?' for k in restored)+' WHERE user_id=?',
+                           (*restored.values(),user_id))
+                return dict(db.execute('SELECT * FROM billing WHERE user_id=?',(user_id,)).fetchone())
+        if row['customer_id']:
+            # A legacy record must be identified, not guessed from the current API key.
+            try:
+                customer = stripe.Customer.retrieve(row['customer_id'], api_key=self.key(), max_network_retries=1)
+            except stripe.InvalidRequestError as error:
+                if error.code != 'resource_missing':
+                    raise BillingUnavailable('The existing billing profile needs review.') from None
+            except stripe.StripeError:
+                raise BillingUnavailable('Could not verify the existing billing profile. Please try again.') from None
+            else:
+                if not customer.get('deleted') and bool(customer.get('livemode')) == (self.mode() == 'live'):
+                    self.update(user_id, stripe_mode=self.mode())
+                    return self.row(user_id)
+                raise BillingUnavailable('The existing billing profile needs review.')
+        with self.accounts.connect() as db:
+            db.execute('INSERT INTO billing_mode_archive VALUES (?,?,?,?)',
+                       (user_id,row['stripe_mode'],json.dumps(row),time.time()))
+        self.update(user_id, customer_id=None, subscription_id=None, status='none', plan='',
+                    period_end=0, cancel_at=0, synced=0, checkout_id=None, checkout_key=None,
+                    checkout_plan=None, checkout_started=None, stripe_mode=self.mode())
+        return self.row(user_id)
+
     def validate_price(self, plan):
         price_id = self.price_id(plan)
         if self.price_cache.get(price_id, 0) > time.time():
@@ -191,7 +256,7 @@ class Billing:
     def sync(self, user_id):
         self.ensure_ready()
         with self.lock:
-            row = self.row(user_id)
+            row = self.ensure_customer_mode(user_id)
             if not row['customer_id']:
                 return row
             result = self.api(stripe.Subscription.list, customer=row['customer_id'], status='all', limit=100)
@@ -222,7 +287,7 @@ class Billing:
             raise ValueError('Choose one of the available plans.')
         with self.lock:
             self.validate_price(plan)
-            row = self.row(user['id'])
+            row = self.ensure_customer_mode(user['id'])
             if not row['customer_id']:
                 customer = self.api(stripe.Customer.create, email=user['email'], metadata={'sentleaf_user':user['id']},
                                     idempotency_key='sentleaf-customer-'+user['id'])
@@ -262,7 +327,7 @@ class Billing:
 
     def portal(self, user):
         self.ensure_ready()
-        row = self.row(user['id'])
+        row = self.ensure_customer_mode(user['id'])
         if not row['customer_id']:
             raise ValueError('This account has no billing profile yet.')
         session = self.api(stripe.billing_portal.Session.create, customer=row['customer_id'],

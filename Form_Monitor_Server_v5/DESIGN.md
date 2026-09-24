@@ -29,3 +29,15 @@ owner access are preserved while billing is off.
 
 See `BILLING_SETUP.md` for Stripe activation and the remaining public-release
 requirements. Test fixtures and local previews are never published.
+
+## Final experience refresh
+
+A quieter header, concise product copy, a clearly labeled interactive delivery
+example, and a single trial CTA replace the decorative arrows and repeated
+marketing labels. The workspace retains familiar navigation, Gmail permissions,
+check actions and error evidence. Search, Studio client groups, weekly reporting,
+history pagination and CSV export are functional. Empty and trial states guide
+users to the next available action; paid features are enforced by the server.
+
+The trial page discloses individual access review beside its primary action.
+It never implies immediate public signup while the allowlists remain in place.

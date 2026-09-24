@@ -38,11 +38,11 @@ def write_json(path, value):
     temporary.replace(path)
 
 
-def events_at(path):
+def events_at(path, limit=100):
     events = []
     try:
         with path.open(encoding='utf-8') as file:
-            for line in deque(file, maxlen=100):
+            for line in deque(file, maxlen=limit):
                 try:
                     item = json.loads(line)
                     if isinstance(item, dict): events.append(item)
@@ -106,7 +106,10 @@ class Workspace:
         connection_id = data.get('connection_id','')
         if not isinstance(connection_id,str) or (connection_id and not re.fullmatch('[a-f0-9]{32}',connection_id)):
             raise ValueError('Choose a valid Gmail connection.')
-        return dict(name=name,url=url,selector=selector,fields=fields,interval=interval,connection_id=connection_id)
+        group = data.get('group', '')
+        if not isinstance(group, str) or len(group.strip()) > 60:
+            raise ValueError('Use a client or site group of up to 60 characters.')
+        return dict(name=name,url=url,selector=selector,fields=fields,interval=interval,connection_id=connection_id,group=group.strip())
 
     def save(self, data):
         value = self.validate(data)
@@ -241,7 +244,7 @@ class Workspace:
                             self.last_errors[ident]=str(error);self.due.pop(ident,None)
             self.wake.wait(1);self.wake.clear()
 
-    def snapshot(self):
+    def snapshot(self, history_days=None, report_limit=200, event_limit=100):
         with self.lock:
             profiles=json.loads(json.dumps(self.profiles));active=self.active;due=dict(self.due)
             logs=list(self.logs);errors=dict(self.last_errors)
@@ -257,7 +260,7 @@ class Workspace:
                     reports.append(r)
             reports.sort(key=lambda r:r.get('started_utc',''),reverse=True)
             events=[]
-            for path in (folder/'service').glob('*/events.jsonl'):events.extend(events_at(path))
+            for path in (folder/'service').glob('*/events.jsonl'):events.extend(events_at(path, None if history_days else 100))
             events.sort(key=lambda e:e.get('time_utc',''),reverse=True)
             for e in events:e['profile_name']=p['name'];e['profile_id']=p['id'];e['archived']=bool(p.get('deleted'))
             latest=next((e for e in events if e.get('revision')==p['revision']),None)
@@ -267,5 +270,14 @@ class Workspace:
             all_reports.extend(reports);all_events.extend(events)
         all_reports.sort(key=lambda r:r.get('started_utc',''),reverse=True)
         all_events.sort(key=lambda e:e.get('time_utc',''),reverse=True)
+        if history_days is not None:
+            cutoff=time.time()-history_days*86400
+            def recent(item,key):
+                try:return datetime.fromisoformat(item.get(key,'').replace('Z','+00:00')).timestamp()>=cutoff
+                except (TypeError,ValueError):return False
+            all_reports=[r for r in all_reports if recent(r,'started_utc')]
+            all_events=[e for e in all_events if recent(e,'time_utc')]
+            for p in profiles:
+                if p['last_report'] and not recent(p['last_report'],'started_utc'):p['last_report']=None
         return dict(user=self.user,google=self.oauth.status(),csrf=self.csrf,profiles=[p for p in profiles if not p.get('deleted')],active=active,logs=logs,connections=self.connections(),
-            reports=all_reports[:200],events=all_events[:100])
+            reports=all_reports[:report_limit],events=all_events[:event_limit],report_count=len(all_reports))
