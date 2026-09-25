@@ -106,7 +106,7 @@ class Billing:
         if user['owner']:
             plan, label, limit, interval, active = 'owner', 'Owner workspace', 20, 15, True
         elif not self.enabled() and not self.trials_enabled():
-            plan, label, limit, interval, active = 'beta', 'Private beta', 20, 15, True
+            plan, label, limit, interval, active = 'beta', 'Complimentary access', 20, 15, True
         elif row['stripe_mode'] == self.mode() and row['status'] in ('active', 'trialing') and row['plan'] in PLANS and row['period_end'] > now:
             plan = row['plan']; label = PLANS[plan]['name']
             limit, interval, active = PLANS[plan]['monitors'], PLANS[plan]['interval'], True

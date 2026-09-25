@@ -1,12 +1,20 @@
 import json
 import os
+import re
 import uuid
 from datetime import datetime, timezone
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 
-def send_email(subject, text, *, recipient=None, sensitive=False, html=None):
+class EmailDeliveryError(RuntimeError):
+    def __init__(self, message, *, retryable=False):
+        super().__init__(message)
+        self.retryable = retryable
+
+
+def send_email(subject, text, *, recipient=None, sensitive=False, html=None,
+               reply_to=None, idempotency_key=None, sender=None):
     api_key = os.environ.get("RESEND_API_KEY", "").strip()
     recipient = (os.environ.get("ALERT_EMAIL", "") if recipient is None else recipient).strip()
 
@@ -16,22 +24,32 @@ def send_email(subject, text, *, recipient=None, sensitive=False, html=None):
         raise RuntimeError("ALERT_EMAIL is not configured.")
 
     payload = {
-        "from": os.environ.get('FM_EMAIL_FROM', '').strip() or "Sentleaf <onboarding@resend.dev>",
+        "from": sender or os.environ.get('FM_EMAIL_FROM', '').strip() or "Sentleaf <onboarding@resend.dev>",
         "to": [recipient],
         "subject": subject,
         "text": text,
     }
     if html is not None:
         payload['html'] = html
+    if reply_to is not None:
+        if not re.fullmatch(r'[^\s@<>,;:"\\]+@[^\s@<>,;:"\\]+\.[^\s@<>,;:"\\]+', reply_to):
+            raise ValueError('Use one valid reply address.')
+        payload['reply_to'] = reply_to
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "User-Agent": "FormMonitor/0.1",
+    }
+    if idempotency_key is not None:
+        if not re.fullmatch(r'[A-Za-z0-9_/-]{1,256}', idempotency_key):
+            raise ValueError('Invalid email idempotency key.')
+        headers['Idempotency-Key'] = idempotency_key
 
     request = Request(
         "https://api.resend.com/emails",
         data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-            "User-Agent": "FormMonitor/0.1",
-        },
+        headers=headers,
         method="POST",
     )
 
@@ -40,25 +58,31 @@ def send_email(subject, text, *, recipient=None, sensitive=False, html=None):
             result = json.load(response)
 
     except HTTPError as error:
+        details = error.read().decode("utf-8", errors="replace")
+        error.close()
+        retryable = error.code == 429 or error.code >= 500
+        if error.code == 409:
+            try:
+                retryable = json.loads(details).get('name') == 'concurrent_idempotent_requests'
+            except (ValueError, AttributeError):
+                pass
         if sensitive:
             # Providers can echo request data in errors. Never expose a reset link.
-            error.close()
-            raise RuntimeError(f"Resend rejected the account email (HTTP {error.code}).") from None
-        details = error.read().decode("utf-8", errors="replace")
+            raise EmailDeliveryError(f"Resend rejected the email (HTTP {error.code}).", retryable=retryable) from None
         details = details.replace(api_key, "[REDACTED]")
-        raise RuntimeError(
-            f"Resend HTTP {error.code}: {details}"
+        raise EmailDeliveryError(
+            f"Resend HTTP {error.code}: {details}", retryable=retryable
         ) from None
 
     except (URLError, TimeoutError):
-        raise RuntimeError(
+        raise EmailDeliveryError(
             "Could not confirm Resend's response. "
-            "Check the Resend dashboard before sending again."
+            "Check the Resend dashboard before sending again.", retryable=True
         ) from None
 
     message_id = result.get("id")
     if not message_id:
-        raise RuntimeError("Resend did not return a message ID.")
+        raise EmailDeliveryError("Resend did not return a message ID.", retryable=True)
 
     print("Resend accepted the email.")
     print("Message ID:", message_id)

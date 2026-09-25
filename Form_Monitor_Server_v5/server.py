@@ -134,7 +134,7 @@ class ServerHub:
     def __init__(self,root,origin):
         self.root=root;self.origin=origin;self.accounts=Accounts(root)
         self.billing=Billing(self.accounts,origin)
-        self.inquiries=Inquiries(self.accounts)
+        self.inquiries=Inquiries(self.accounts,origin)
         if self.accounts.setup_required():self.accounts.setup_code=os.environ['FM_SETUP_CODE']
         self.workspaces={};self.lock=threading.RLock();self.runner=threading.Lock();self.stopping=False
         self.mutations=threading.RLock()
@@ -194,6 +194,7 @@ class ServerHub:
             return self.workspaces[user['id']]
 
     def close(self):
+        self.inquiries.close()
         self.billing.close()
         if self.recovery:self.recovery.close()
         self.backup_stop.set()
@@ -312,7 +313,7 @@ def create_app():
     @app.post('/api/login')
     def authenticate():
         value=data()
-        if str(value.get('email','')).strip().lower() not in allowed:raise ValueError('This account is not enabled for the private beta.')
+        if str(value.get('email','')).strip().lower() not in allowed:raise ValueError('Access has not been enabled for this account yet. Request access through the contact page.')
         token,user=hub.accounts.authenticate(value,register=request.path=='/api/register')
         hub.accounts.logout(current_token());return cookie(jsonify(ok=True,user=user),token)
     @app.post('/api/logout')
@@ -323,7 +324,9 @@ def create_app():
         access=hub.billing.state(g.auth['user'])
         value=workspace().snapshot(history_days=access['history_days']);value['csrf']=g.auth['csrf']
         value['billing']=access
-        if g.auth['user']['owner']:value['inquiries']=hub.inquiries.listing()
+        if g.auth['user']['owner']:
+            value['inquiries']=hub.inquiries.listing()
+            value['inquiry_notifications']=hub.inquiries.notification_settings()
         if g.auth['user']['owner']:value['backups']=hub.backup_status()
         return jsonify(value)
     @app.get('/api/history')
@@ -425,4 +428,5 @@ def create_app():
         return send_file(ROOT/'dashboard_assets'/assets[name])
     hub.start_backups()
     hub.billing.start()
+    hub.inquiries.start()
     return app

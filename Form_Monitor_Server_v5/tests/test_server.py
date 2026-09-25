@@ -17,7 +17,7 @@ from transfer import export_data, import_data
 class ServerTests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.root=Path(self.temp.name)
-        self.env=patch.dict(os.environ,{'FM_TRIALS_ENABLED':'0','FM_BACKUPS_ENABLED':'0','FM_PUBLIC_URL':'https://beta.example','FM_STORAGE_ROOT':str(self.root),'FM_SETUP_CODE':'test-owner-code-that-is-long-enough','FM_ENCRYPTION_KEY':secrets.token_hex(32),'FM_ALLOWED_EMAILS':'owner@example.com,second@example.com','FM_ALLOWED_FORM_HOSTS':'forms.example','GOOGLE_CLIENT_ID':'test.apps.googleusercontent.com','GOOGLE_CLIENT_SECRET':'fake','RESEND_API_KEY':'fake'},clear=False);self.env.start()
+        self.env=patch.dict(os.environ,{'FM_TRIALS_ENABLED':'0','FM_BACKUPS_ENABLED':'0','FM_INQUIRY_EMAILS_ENABLED':'0','FM_PUBLIC_URL':'https://beta.example','FM_STORAGE_ROOT':str(self.root),'FM_SETUP_CODE':'test-owner-code-that-is-long-enough','FM_ENCRYPTION_KEY':secrets.token_hex(32),'FM_ALLOWED_EMAILS':'owner@example.com,second@example.com','FM_ALLOWED_FORM_HOSTS':'forms.example','GOOGLE_CLIENT_ID':'test.apps.googleusercontent.com','GOOGLE_CLIENT_SECRET':'fake','RESEND_API_KEY':'fake'},clear=False);self.env.start()
         self.render_env=patch.dict(os.environ,{'RENDER_EXTERNAL_HOSTNAME':'legacy.onrender.com'});self.render_env.start()
         self.addCleanup(self.render_env.stop)
         self.app=create_app();self.app.testing=True;self.hub=self.app.extensions['hub']
@@ -99,6 +99,9 @@ class ServerTests(unittest.TestCase):
         requests=self.get(self.a,'/api/state').json['inquiries']
         self.assertEqual(len(requests),1)
         self.assertEqual(requests[0]['email'],'visitor@example.com')
+        self.assertEqual(requests[0]['email_status'],'pending')
+        self.assertEqual(self.get(self.a,'/api/state').json['inquiry_notifications']['recipient'],'owner@example.com')
+        self.assertNotIn('inquiry_notifications',self.get(self.b,'/api/state').json)
         self.assertNotIn('inquiries',self.get(self.b,'/api/state').json)
         self.assertEqual(self.get(visitor,'/api/state').status_code,401)
         self.assertEqual(self.post(self.b,'/api/inquiries/delete',{'id':requests[0]['id']}).status_code,403)

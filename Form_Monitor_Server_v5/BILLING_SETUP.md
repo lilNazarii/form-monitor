@@ -117,17 +117,29 @@ Current limitation: per-instance runner and SQLite store; keep one Gunicorn
 worker and one Render instance. Server capacity and support costs still need
 measurement on external pilot sites before increasing customer volume.
 
-## Early-access requests
+## Contact and trial requests
 
-The homepage now links to `/contact`. A visitor can request access, ask a product
-question, or submit a data request. Requests are stored in the existing database
-and shown only to the owner under Access requests. No email is sent, no account
-is created, and no website is authorized automatically. Review requests in the
-workspace; verify account ownership before handling data deletion. Requests
-expire after 90 days during normal housekeeping. Core backups can still contain
-previous records until their rotation; owner-downloaded copies need separate
-handling. The public `/privacy` page describes current behavior. It does not
-replace the complete operator identity and subscription terms needed at launch.
+The homepage links to `/trial` and `/contact`. Visitors can request access, ask
+questions, or submit data requests. Each new request is saved in the existing
+database and queued for email to the registered owner account (never the visitor
+or a submitted recipient field). Access requests remain available only to the
+owner. Reply-To uses the visitor's unverified address, allowing a manual reply
+from the owner's inbox. No automatic customer reply or account approval is sent.
+
+The worker uses the existing `RESEND_API_KEY` and `FM_EMAIL_FROM`. It runs by
+default; `FM_INQUIRY_EMAILS_ENABLED=0` pauses delivery without losing requests.
+Pending deliveries survive restarts; temporary errors retry with a persisted
+envelope and Resend idempotency key. Retries stop after eight attempts or 23 hours
+from the first attempt, before the provider's 24-hour key expiry. Permanent
+errors are shown as failed in the owner's request list. "Accepted" means accepted
+by the provider, not guaranteed inbox delivery; confirm delivery in Resend.
+Existing requests from before this release are not emailed retroactively.
+
+Requests and their queued envelopes expire after 90 days or owner deletion. Mail
+already accepted by the provider cannot be recalled by deleting a workspace row;
+copies in the owner's inbox, provider records, and backups need separate handling.
+Deleting during an in-flight send may not stop that email. Verify account ownership
+before handling a data request. The public `/privacy` page describes this behavior.
 
 ## September 24 experience release
 
