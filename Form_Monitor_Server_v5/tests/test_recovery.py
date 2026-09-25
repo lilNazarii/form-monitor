@@ -32,7 +32,7 @@ class EmailLinks(HTMLParser):
 class RecoveryTests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.root=Path(self.temp.name)/'live'
-        self.env=patch.dict(os.environ,{'FM_STORAGE_ROOT':str(self.root),'FM_BACKUPS_ENABLED':'0',
+        self.env=patch.dict(os.environ,{'FM_STORAGE_ROOT':str(self.root),'FM_BACKUPS_ENABLED':'0','FM_INQUIRY_EMAILS_ENABLED':'0',
             'FM_PUBLIC_URL':'https://beta.example','FM_SETUP_CODE':'owner-code-for-password-recovery-test',
             'FM_ENCRYPTION_KEY':secrets.token_hex(32),'FM_ALLOWED_EMAILS':'owner@example.com,other@example.com,invited@example.com',
             'FM_ALLOWED_FORM_HOSTS':'forms.example','GOOGLE_CLIENT_ID':'test.apps.googleusercontent.com',

@@ -2,7 +2,7 @@
 from html import escape
 
 
-def _layout(*, preview, label, heading, intro, action, link, note, fallback=False):
+def _layout(*, preview, label, heading, intro, action, link, note, fallback=False, details=()):
     # Escape every value, including both copies of the URL. Never place account
     # links in image requests or external fonts; the design needs no remote assets.
     preview, label, heading, intro, action, link, note = (
@@ -10,8 +10,16 @@ def _layout(*, preview, label, heading, intro, action, link, note, fallback=Fals
         for value in (preview, label, heading, intro, action, link, note)
     )
     extra = ''
+    if details:
+        rows = ''.join(
+            '<tr><td style="padding:0 0 18px;word-break:break-word;overflow-wrap:anywhere;">'
+            f'<p style="margin:0 0 5px;color:#677169;font-size:12px;">{escape(title)}</p>'
+            f'<p style="margin:0;color:#202d27;font-size:14px;line-height:22px;white-space:pre-wrap;">{escape(value)}</p>'
+            '</td></tr>' for title, value in details
+        )
+        extra = f'<tr><td class="inset" style="padding:0 32px 10px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="table-layout:fixed;">{rows}</table></td></tr>'
     if fallback:
-        extra = f'''
+        extra += f'''
           <tr><td class="inset" style="padding:0 32px 30px;">
             <p style="margin:0 0 8px;color:#677169;font-size:12px;line-height:18px;">Button not working? Copy this link into your browser:</p>
             <p style="margin:0;font-size:12px;line-height:18px;word-break:break-all;overflow-wrap:anywhere;">
@@ -106,3 +114,21 @@ def password_changed_html(origin):
         link=f'{origin}/login',
         note='If you didn’t make this change, secure your email account. Then use “Forgot password?” on the Sentleaf sign-in page to reset your password.',
     )
+
+
+def inquiry_email(inquiry, origin):
+    from datetime import datetime, timezone
+    kind = {'access': 'Trial request', 'support': 'Support message', 'data': 'Data request'}[inquiry['kind']]
+    received = datetime.fromtimestamp(inquiry['created'], timezone.utc).strftime('%d %b %Y, %H:%M UTC')
+    link = f'{origin}/workspace#requests'
+    details = [('From', inquiry['email']), ('Website', inquiry['website'] or 'Not provided'),
+               ('Message', inquiry['message'] or 'No additional message.'), ('Received', received)]
+    subject = f'[Sentleaf] {kind} - {inquiry["id"][:8]}'
+    text = f'A new {kind.lower()} was submitted through Sentleaf.\n\n'
+    text += '\n\n'.join(f'{label}:\n{value}' for label, value in details)
+    text += f'\n\nView in your workspace:\n{link}\n\nReply to this email to contact the sender. The sender address is supplied by the visitor and is not verified.'
+    html = _layout(preview=f'A new {kind.lower()} is ready for your review.', label='NEW ENQUIRY',
+                   heading=f'New {kind.lower()}.', intro='A visitor sent you a message through Sentleaf.',
+                   action='Open requests', link=link, details=details,
+                   note='Reply to this email to contact the sender. The address is supplied by the visitor and is not verified.')
+    return dict(subject=subject, text=text, html=html, reply_to=inquiry['email'])
