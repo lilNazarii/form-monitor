@@ -219,6 +219,8 @@ def create_app():
     if not re.fullmatch('[a-fA-F0-9]{64}',os.environ['FM_ENCRYPTION_KEY']):raise RuntimeError('FM_ENCRYPTION_KEY must be 64 hex characters.')
     if len(os.environ['FM_SETUP_CODE'])<24:raise RuntimeError('FM_SETUP_CODE must be at least 24 random characters.')
     allowed={x.strip().lower() for x in os.environ['FM_ALLOWED_EMAILS'].split(',') if x.strip()}
+    public_registration=os.environ.get('FM_PUBLIC_REGISTRATION')=='1'
+    if public_registration:allowed=None
     hub=ServerHub(Path(os.environ['FM_STORAGE_ROOT']),origin)
     hub.recovery=PasswordRecovery(hub.accounts,origin,allowed)
     app=Flask(__name__,static_folder=None);app.config['MAX_CONTENT_LENGTH']=8192;app.extensions['hub']=hub
@@ -247,7 +249,7 @@ def create_app():
         if request.method=='POST' or request.path=='/oauth/google/callback':
             hub.mutations.acquire();g.mutation_lock=True
         g.auth=hub.accounts.session(current_token())
-        if g.auth and g.auth['user']['email'] not in allowed:
+        if g.auth and allowed is not None and g.auth['user']['email'] not in allowed:
             hub.accounts.logout(current_token());g.auth=None
         if request.method=='POST':
             if request.headers.get('Origin')!=origin or request.headers.get('Sec-Fetch-Site')=='cross-site':return jsonify(error='Request origin rejected.'),403
@@ -282,7 +284,7 @@ def create_app():
     @app.get('/healthz')
     def health():return jsonify(ok=True)
     @app.get('/api/session')
-    def session():return jsonify(user=g.auth['user'] if g.auth else None,csrf=g.auth['csrf'] if g.auth else hub.accounts.public_csrf,setup_required=hub.accounts.setup_required())
+    def session():return jsonify(user=g.auth['user'] if g.auth else None,csrf=g.auth['csrf'] if g.auth else hub.accounts.public_csrf,setup_required=hub.accounts.setup_required(),public_registration=public_registration)
     @app.get('/api/plans')
     def plans():return jsonify(hub.billing.catalog())
     @app.post('/api/inquiries')
@@ -313,7 +315,7 @@ def create_app():
     @app.post('/api/login')
     def authenticate():
         value=data()
-        if str(value.get('email','')).strip().lower() not in allowed:raise ValueError('Access has not been enabled for this account yet. Request access through the contact page.')
+        if allowed is not None and str(value.get('email','')).strip().lower() not in allowed:raise ValueError('Access has not been enabled for this account yet. Request access through the contact page.')
         token,user=hub.accounts.authenticate(value,register=request.path=='/api/register')
         hub.accounts.logout(current_token());return cookie(jsonify(ok=True,user=user),token)
     @app.post('/api/logout')
@@ -423,6 +425,7 @@ def create_app():
     @app.get('/<path:name>')
     def static_file(name=''):
         if name=='trial' and g.auth:return redirect('/workspace#billing',code=303)
+        if name=='trial' and public_registration:return redirect('/login?signup=1',code=303)
         if name=='workspace' and not g.auth:return redirect('/login',code=303)
         if name not in assets:return jsonify(error='Not found.'),404
         return send_file(ROOT/'dashboard_assets'/assets[name])

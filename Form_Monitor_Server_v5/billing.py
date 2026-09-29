@@ -86,7 +86,7 @@ class Billing:
     def catalog(cls):
         return dict(plans=[dict(id=k, **v) for k, v in PLANS.items()], trial_days=TRIAL_DAYS,
                     checkout_ready=cls.configured(), billing_enabled=cls.enabled(),
-                    trials_enabled=cls.trials_enabled(), access_review_required=True,
+                    trials_enabled=cls.trials_enabled(), access_review_required=os.environ.get('FM_PUBLIC_REGISTRATION')!='1',
                     test_mode=not cls.key().startswith(('sk_live_', 'rk_live_')))
 
     def row(self, user_id):

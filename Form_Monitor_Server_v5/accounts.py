@@ -145,7 +145,7 @@ class Accounts:
             FROM password_resets JOIN users ON users.id=password_resets.user_id
             WHERE token_hash=? AND expires>?''',
             (hashlib.sha256(token.encode()).hexdigest(), time.time())).fetchone()
-        if (row is None or row['email'] not in allowed
+        if (row is None or (allowed is not None and row['email'] not in allowed)
                 or not hmac.compare_digest(bytes(row['digest']), bytes(row['password_digest']))):
             return None
         return row
