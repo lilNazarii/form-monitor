@@ -117,6 +117,18 @@ Current limitation: per-instance runner and SQLite store; keep one Gunicorn
 worker and one Render instance. Server capacity and support costs still need
 measurement on external pilot sites before increasing customer volume.
 
+## Public registration (September 29)
+
+Set `FM_PUBLIC_REGISTRATION=1` to allow any valid email to create a normal
+account, sign in, and recover its password without email allowlist approval.
+The default remains restricted. Set it to `0` to restore `FM_ALLOWED_EMAILS`
+enforcement (accounts remain stored, but non-allowlisted sessions are rejected).
+Owner setup still requires its secret; registration cannot grant owner rights.
+The public `/trial` link opens signup, or billing for an existing session.
+Registration alone does not start a trial or charge the user. Website host
+restrictions, OAuth configuration, plan limits and payment switches are unchanged.
+This setting supersedes the email-review portions of the September 24 notes below.
+
 ## Contact and trial requests
 
 The homepage links to `/trial` and `/contact`. Visitors can request access, ask

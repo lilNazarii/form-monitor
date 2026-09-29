@@ -27,7 +27,7 @@ async function loadPublicPlans() {
     target.innerHTML = SentleafPlans.cards(catalog);
     document.getElementById('pricing-status').textContent = catalog.checkout_ready && !catalog.test_mode
       ? 'Monthly subscriptions. Cancel from your workspace.'
-      : 'Launch prices shown. Payments are not open yet; trial access is reviewed.';
+      : catalog.access_review_required ? 'Launch prices shown. Payments are not open yet; trial access is reviewed.' : 'Launch prices shown. Create an account to get started. Payments are not open yet.';
   } catch { target.textContent = 'Plans are temporarily unavailable. Please refresh the page.'; }
 }
 loadPublicPlans();

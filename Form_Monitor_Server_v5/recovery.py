@@ -19,7 +19,7 @@ class PasswordRecovery:
     def __init__(self, accounts, origin, allowed):
         self.accounts = accounts
         self.origin = origin
-        self.allowed = frozenset(allowed)
+        self.allowed = None if allowed is None else frozenset(allowed)
         self.jobs = queue.Queue(maxsize=32)
         self.lock = threading.Lock()
         self.requests = []
@@ -78,7 +78,7 @@ class PasswordRecovery:
                 self.jobs.task_done()
 
     def deliver(self, kind, email):
-        if email not in self.allowed:
+        if self.allowed is not None and email not in self.allowed:
             return
         if kind == 'changed':
             send_email('[Sentleaf] Your password was changed',
