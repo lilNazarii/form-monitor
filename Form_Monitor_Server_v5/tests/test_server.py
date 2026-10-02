@@ -43,7 +43,7 @@ class ServerTests(unittest.TestCase):
         return self.get(c,'/api/state').json['google']['accounts'][0]['id']
     def profile(self,c,connection,url='https://forms.example/contact/'):
         data=dict(name='A form',url=url,selector='form.wpcf7-form',fields=dict(name='your-name',email='your-email',subject='your-subject',message='your-message'),interval=60,connection_id=connection)
-        with patch('server.validate_url',return_value=data['url']):r=self.post(c,'/api/profiles',data)
+        with patch.object(self.hub.sites,'require'):r=self.post(c,'/api/profiles',data)
         self.assertEqual(r.status_code,200,r.json);return r.json['id']
     def test_accounts_and_auth(self):
         c=self.app.test_client();self.assertEqual(self.get(c,'/api/state').status_code,401)
@@ -206,7 +206,7 @@ class ServerTests(unittest.TestCase):
             state=self.get(self.a,'/api/state')
             self.assertNotIn('test-tunnel-secret',state.get_data(as_text=True))
             self.assertFalse(bw.connections()['live_link_ready'])
-            with patch('server.validate_url'), patch('workspace.subprocess.Popen') as popen:
+            with patch.object(self.hub.sites,'require'), patch('workspace.subprocess.Popen') as popen:
                 child=popen.return_value.__enter__.return_value
                 child.stdout=['test-tunnel-secret\n'];child.wait.return_value=0
                 response=self.post(self.a,'/api/run',dict(id=ident))
@@ -229,7 +229,7 @@ class ServerTests(unittest.TestCase):
                 self.assertNotIn('LIVE_LINK_PASSWORD',run_env)
             second_env=bw.environment_for_run(bw.profile(second_id),self.root/'unused.json')
             self.assertNotIn('LIVE_LINK_PASSWORD',second_env)
-            with patch('server.validate_url'):
+            with patch.object(self.hub.sites,'require'):
                 with self.assertRaisesRegex(ValueError,'not configured'):
                     aw.ready(dict(aw.profile(ident),url='https://other-lab.localsite.io/contact/'))
 

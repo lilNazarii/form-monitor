@@ -1,4 +1,4 @@
-"""Single-instance, closed-beta HTTPS application. Run with the supplied Gunicorn config."""
+"""Single-instance HTTPS application. Run with the supplied Gunicorn config."""
 import atexit
 from contextlib import ExitStack
 import io
@@ -15,6 +15,7 @@ from accounts import Accounts
 from workspace import Workspace, read_json, write_json
 from server_google import WebOAuth
 from server_network import allowed_hosts, validate_url
+from site_verification import SiteVerification
 from backups import create_backup, backup_files
 from recovery import PasswordRecovery, REQUEST_MESSAGE
 from billing import Billing, BillingUnavailable, BillingAccessError, DailyLimit
@@ -53,6 +54,7 @@ class ServerWorkspace(Workspace):
 
     def environment_for_run(self,p,runtime):
         env=super().environment_for_run(p,runtime)
+        env['FM_VERIFIED_FORM_HOST']=urlsplit(p['url']).hostname
         # Never inherit global mailbox credentials or tunnel credentials by default.
         for key in ('GMAIL_ADDRESS','GMAIL_APP_PASSWORD','LIVE_LINK_USER','LIVE_LINK_PASSWORD','STRIPE_SECRET_KEY','STRIPE_WEBHOOK_SECRET'):
             env.pop(key,None)
@@ -69,13 +71,13 @@ class ServerWorkspace(Workspace):
             previous = self.profile(data['id']).get('group','') if data.get('id') else ''
             if data['group'] != previous:raise ValueError('Client groups are included in Studio.')
         self.hub.billing.check(self.user,self.profiles,data=data)
-        validate_url(str(data.get('url','')))
+        self.hub.sites.require(self.user,str(data.get('url','')))
         if not data.get('connection_id'):raise ValueError('Choose your connected Gmail account.')
         ident=super().save(data);self.persist_schedule();return ident
 
     def ready(self,p):
         self.hub.billing.check(self.user,self.profiles,profile=p)
-        validate_url(p['url'])
+        self.hub.sites.require(self.user,p['url'])
         if not p.get('connection_id'):raise ValueError('Connect Gmail and choose it in Edit settings.')
         host=urlsplit(p['url']).hostname
         if host.endswith('.localsite.io') and host!=self.live_link_host():
@@ -133,6 +135,7 @@ class ServerWorkspace(Workspace):
 class ServerHub:
     def __init__(self,root,origin):
         self.root=root;self.origin=origin;self.accounts=Accounts(root)
+        self.sites=SiteVerification(self.accounts)
         self.billing=Billing(self.accounts,origin)
         self.inquiries=Inquiries(self.accounts,origin)
         if self.accounts.setup_required():self.accounts.setup_code=os.environ['FM_SETUP_CODE']
@@ -364,6 +367,9 @@ def create_app():
         return jsonify(ok=True,billing=hub.billing.start_trial(g.auth['user']))
     @app.post('/api/billing/checkout')
     def billing_checkout():
+        hub.billing.ensure_ready()
+        if not any(a['available'] for a in workspace().oauth.store.listing()):
+            raise ValueError('Connect Gmail before choosing a paid plan so you can confirm access works for your account.')
         return jsonify(url=hub.billing.checkout(g.auth['user'],data().get('plan')))
     @app.post('/api/billing/portal')
     def billing_portal():return jsonify(url=hub.billing.portal(g.auth['user']))
@@ -385,6 +391,15 @@ def create_app():
                          as_attachment=True,download_name=path.name)
     @app.post('/api/profiles')
     def profile():return jsonify(ok=True,id=workspace().save(data()))
+    @app.post('/api/sites/challenge')
+    def site_challenge():return jsonify(hub.sites.challenge(g.auth['user'],str(data().get('url',''))))
+    @app.post('/api/sites/verify')
+    def site_verify():return jsonify(hub.sites.verify(g.auth['user'],str(data().get('url',''))))
+    @app.post('/api/billing/readiness')
+    def billing_readiness():
+        if not g.auth['user']['owner']:return jsonify(error='Only the owner can check billing configuration.'),403
+        from billing_readiness import inspect_billing
+        return jsonify(inspect_billing(hub.billing))
     @app.post('/api/run')
     def run():workspace().run(data().get('id'));return jsonify(ok=True)
     @app.post('/api/delete')
