@@ -3,10 +3,25 @@ import unittest
 from unittest.mock import Mock, patch
 import stripe
 from billing import EVENTS
-from billing_readiness import inspect_billing
+from billing_readiness import inspect_billing, checkout_preflight
 
 
 class BillingReadinessTests(unittest.TestCase):
+    def test_unpaid_checkout_probe_expires_without_customer_or_payment_details(self):
+        billing=Mock(origin='https://sentleaf.app');billing.key.return_value='rk_test_fixture'
+        billing.price_id.side_effect=lambda plan:'price_'+plan
+        with patch('billing_readiness.stripe.StripeClient') as constructor:
+            sessions=constructor.return_value.v1.checkout.sessions
+            sessions.create.return_value=stripe.checkout.Session.construct_from(dict(id='cs_fixture',livemode=False), 'rk_test_fixture')
+            sessions.expire.return_value=stripe.checkout.Session.construct_from(dict(status='expired'),'rk_test_fixture')
+            result=checkout_preflight(billing)
+            sessions.expire.assert_called_once_with('cs_fixture')
+            data=sessions.create.call_args.args[0]
+            self.assertEqual(data['line_items'],[dict(price='price_solo',quantity=1)])
+            for key in ('customer','customer_email','payment_method_types','payment_method'):
+                self.assertNotIn(key,data)
+        self.assertEqual(result,dict(created=True,mode='test',expired=True))
+
     def test_reports_configuration_without_secrets_or_customer_information(self):
         billing=Mock(origin='https://sentleaf.app')
         billing.mode.return_value='live';billing.enabled.return_value=False

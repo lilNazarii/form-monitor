@@ -2,6 +2,9 @@
 import json
 import logging
 import os
+import secrets
+import string
+import time
 import stripe
 from billing import PLANS, EVENTS
 
@@ -64,6 +67,7 @@ def log_network_readiness(origin):
     from playwright.sync_api import sync_playwright
     from server_network import browser_routes
     stage = 'browser_start'
+    observations = []
     try:
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch(headless=True, args=['--disable-dev-shm-usage',
@@ -74,6 +78,10 @@ def log_network_readiness(origin):
                 context.route('**/*', browser_routes(origin))
                 context.route_web_socket('**/*', lambda ws: ws.close())
                 page = context.new_page()
+                from urllib.parse import urlsplit
+                page.on('response', lambda response: observations.append((urlsplit(response.url).path, response.status)))
+                page.on('requestfailed', lambda request: observations.append((urlsplit(request.url).path, request.failure)))
+                page.on('pageerror', lambda error: observations.append(('javascript', str(error)[:180])))
                 stage = 'public_page'
                 response = page.goto(origin + '/login', wait_until='domcontentloaded', timeout=30000)
                 stage = 'javascript_and_api'
@@ -82,4 +90,36 @@ def log_network_readiness(origin):
             finally:
                 browser.close()
     except Exception as error:
-        logging.getLogger(__name__).warning('Network readiness failed at %s: %s', stage, type(error).__name__)
+        logging.getLogger(__name__).warning('Network readiness failed at %s: %s; resources=%s', stage, type(error).__name__, json.dumps(observations[:20]))
+
+
+def checkout_preflight(billing):
+    """Create and immediately expire an unpaid session. No customer or card data."""
+    if not all(billing.price_id(plan) for plan in PLANS):
+        raise ValueError('Prices must be configured before the checkout preflight.')
+    client = stripe.StripeClient(billing.key(), max_network_retries=1,
+                                http_client=stripe.RequestsClient(timeout=8))
+    label = 'sentleaf_probe_' + ''.join(secrets.choice(string.ascii_lowercase) for _ in range(8))
+    session = client.v1.checkout.sessions.create(dict(mode='subscription',
+        integration_identifier=label, line_items=[dict(price=billing.price_id('solo'),quantity=1)],
+        success_url=billing.origin+'/workspace#billing/return', cancel_url=billing.origin+'/workspace#billing',
+        billing_address_collection='required',tax_id_collection={'enabled':True},
+        automatic_tax={'enabled':os.environ.get('STRIPE_AUTOMATIC_TAX')=='1'},
+        metadata={'sentleaf_purpose':'launch_preflight_no_charge'}, expires_at=int(time.time())+1860),
+        options={'idempotency_key':label}).to_dict()
+    result = dict(created=True, mode='live' if session.get('livemode') else 'test', expired=False)
+    try:
+        result['expired'] = client.v1.checkout.sessions.expire(session['id']).to_dict().get('status') == 'expired'
+    except stripe.StripeError:
+        # No URL is published and it automatically expires in 31 minutes.
+        result['expires_automatically'] = True
+    return result
+
+
+def log_checkout_preflight(billing):
+    try:
+        logging.getLogger(__name__).warning('Checkout preflight: %s', json.dumps(checkout_preflight(billing)))
+    except stripe.StripeError as error:
+        logging.getLogger(__name__).warning('Checkout preflight failed: %s; status=%s; code=%s', type(error).__name__,error.http_status,error.code)
+    except Exception as error:
+        logging.getLogger(__name__).warning('Checkout preflight failed: %s',type(error).__name__)

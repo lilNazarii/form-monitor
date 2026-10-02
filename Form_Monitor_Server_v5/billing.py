@@ -359,6 +359,9 @@ class Billing:
                 db.execute('DELETE FROM billing_events WHERE received<?', (time.time()-90*86400,))
 
     def reconcile(self):
+        if os.environ.get('FM_CHECKOUT_PREFLIGHT') == '1':
+            from billing_readiness import log_checkout_preflight
+            log_checkout_preflight(self)
         if self.key() and os.environ.get('FM_BILLING_AUDIT_ON_START', '1' if os.environ.get('RENDER') else '0') == '1':
             from billing_readiness import log_readiness, log_network_readiness
             log_readiness(self)
