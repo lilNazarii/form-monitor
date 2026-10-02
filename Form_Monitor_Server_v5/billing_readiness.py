@@ -82,15 +82,16 @@ def log_network_readiness(origin):
                 page.on('response', lambda response: observations.append((urlsplit(response.url).path, response.status)))
                 page.on('requestfailed', lambda request: observations.append((urlsplit(request.url).path, request.failure)))
                 page.on('pageerror', lambda error: observations.append(('javascript', str(error)[:180])))
+                page.on('console', lambda message: observations.append(('console', message.text[:180])) if message.type == 'error' else None)
                 stage = 'public_page'
                 response = page.goto(origin + '/login', wait_until='domcontentloaded', timeout=30000)
                 stage = 'javascript_and_api'
-                page.wait_for_function("document.querySelector('#local-note')?.textContent.includes('Create your own account')", timeout=15000)
+                page.locator('#local-note').filter(has_text='Create your own account').wait_for(timeout=15000)
                 logging.getLogger(__name__).warning('Network readiness: public HTTPS page=%s; browser JavaScript and session API loaded.', response.status)
             finally:
                 browser.close()
     except Exception as error:
-        logging.getLogger(__name__).warning('Network readiness failed at %s: %s; resources=%s', stage, type(error).__name__, json.dumps(observations[:20]))
+        logging.getLogger(__name__).warning('Network readiness failed at %s: %s; resources=%s', stage, str(error).splitlines()[0][:180], json.dumps(observations[:20]))
 
 
 def checkout_preflight(billing):
