@@ -18,7 +18,8 @@ def inspect_billing(billing):
 
     def read(name, function):
         try:
-            return function()
+            value = function()
+            return value.to_dict() if hasattr(value, 'to_dict') else value
         except stripe.StripeError as error:
             # Status/class only: provider error text may contain request values.
             result['errors'][name] = dict(type=type(error).__name__, status=error.http_status)
@@ -56,3 +57,29 @@ def log_readiness(billing):
         logging.getLogger(__name__).warning('Billing readiness: %s', json.dumps(inspect_billing(billing), sort_keys=True))
     except Exception as error:
         logging.getLogger(__name__).warning('Billing readiness could not finish: %s', type(error).__name__)
+
+
+def log_network_readiness(origin):
+    """Exercise the production browser transport on our own public login page only."""
+    from playwright.sync_api import sync_playwright
+    from server_network import browser_routes
+    stage = 'browser_start'
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True, args=['--disable-dev-shm-usage',
+                '--host-resolver-rules=MAP * ~NOTFOUND', '--disable-quic',
+                '--force-webrtc-ip-handling-policy=disable_non_proxied_udp'])
+            try:
+                context = browser.new_context(service_workers='block')
+                context.route('**/*', browser_routes(origin))
+                context.route_web_socket('**/*', lambda ws: ws.close())
+                page = context.new_page()
+                stage = 'public_page'
+                response = page.goto(origin + '/login', wait_until='domcontentloaded', timeout=30000)
+                stage = 'javascript_and_api'
+                page.wait_for_function("document.querySelector('#local-note')?.textContent.includes('Create your own account')", timeout=15000)
+                logging.getLogger(__name__).warning('Network readiness: public HTTPS page=%s; browser JavaScript and session API loaded.', response.status)
+            finally:
+                browser.close()
+    except Exception as error:
+        logging.getLogger(__name__).warning('Network readiness failed at %s: %s', stage, type(error).__name__)

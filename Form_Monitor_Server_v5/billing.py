@@ -360,8 +360,10 @@ class Billing:
 
     def reconcile(self):
         if self.key() and os.environ.get('FM_BILLING_AUDIT_ON_START', '1' if os.environ.get('RENDER') else '0') == '1':
-            from billing_readiness import log_readiness
+            from billing_readiness import log_readiness, log_network_readiness
             log_readiness(self)
+            if not self.stop.wait(10):
+                log_network_readiness(self.origin)
         while not self.stop.wait(600):
             if not self.configured():
                 continue

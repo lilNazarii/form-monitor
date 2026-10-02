@@ -1,10 +1,10 @@
 # Sentleaf subscriptions
 
-The integration is shipped **disabled by default**. The private-beta email and
-website allowlists remain enforced. An owner workspace never needs to pay.
-Do not enable public sign-up just because billing is configured: Gmail production
-authorization, site ownership verification, customer-facing legal documents,
-support contact, and external pilot checks are separate release requirements.
+The integration is shipped **disabled by default**. Public registration is enabled
+in production. Customers verify their websites automatically during setup; no
+owner email/domain approval is required. An owner workspace never needs to pay.
+Google authorization, Stripe account readiness, customer-facing billing details,
+and subscription terms remain separate from enabling registration.
 
 ## Offer
 
@@ -63,7 +63,9 @@ subscription is fetched, so event ordering and snapshots cannot grant access.
 
 ## Required provider integration checks before taking real money
 
-Use a separate invited test account. Owner accounts are exempt from billing.
+Run these checks in a controlled sandbox account through automation where possible.
+Owner accounts are exempt from billing; the developer should not ask the owner
+to repeat a second-account walkthrough. Do not run live card charges as tests.
 
 - Hosted Checkout succeeds with sandbox data; the webhook updates the correct
   customer; the return link by itself grants no access.
@@ -125,8 +127,9 @@ The default remains restricted. Set it to `0` to restore `FM_ALLOWED_EMAILS`
 enforcement (accounts remain stored, but non-allowlisted sessions are rejected).
 Owner setup still requires its secret; registration cannot grant owner rights.
 The public `/trial` link opens signup, or billing for an existing session.
-Registration alone does not start a trial or charge the user. Website host
-restrictions, OAuth configuration, plan limits and payment switches are unchanged.
+Registration alone does not start a trial or charge the user. OAuth configuration,
+plan limits and payment switches are unchanged. Website verification became
+self-service in the October 2 release described below.
 This setting supersedes the email-review portions of the September 24 notes below.
 
 ## Contact and trial requests
@@ -179,3 +182,33 @@ Known-mode archived records are restored when switching back, preventing duplica
 customers/subscriptions. Provider failures leave records intact. Trial expiry is
 preserved across mode changes. Database migrations are additive; archives are
 included in the existing encrypted core backups.
+
+## Self-service sites and billing diagnostics (October 2)
+
+A signed-in customer enters their HTTPS contact page in the Website step. The
+server issues an account-and-host-bound verification code. They publish the
+hidden HTML snippet in a WordPress Custom HTML block, or upload the generated
+`sentleaf-verification.txt` file to the site root, then select Verify website.
+The confirmation is saved in `verified_sites` in the account database and its
+existing encrypted backups. Another account or hostname needs its own proof.
+The owner’s legacy `FM_ALLOWED_FORM_HOSTS` entries continue to work for the owner.
+They no longer grant access to every account or need additions for new customers.
+
+The monitor permits public HTTPS on port 443. The transport connects to the
+validated IP while retaining the original TLS hostname. Cross-host POSTs and
+navigation are rejected; external public HTTPS assets can load read-only.
+WebSockets and service workers are disabled. Live Link credentials remain owner
+and exact-host scoped. Use the final canonical URL when a site redirects between
+its apex and www hostname.
+
+A new paid Checkout requires a connected Gmail account. No success redirect
+grants subscription access. Checkout sessions have a stable integration label.
+
+`POST /api/billing/readiness` is owner-only and CSRF-protected. It reads Stripe
+account capabilities, validates the two configured prices, and checks the webhook
+destination and default customer portal. It returns only configuration flags,
+counts, and redacted error types/status codes; no keys, account identity, or
+customer records. It cannot prove that the stored signing secret matches Stripe
+or that a payment was completed. Render runs the same read-only check once per
+startup and logs `Billing readiness`. Set `FM_BILLING_AUDIT_ON_START=0` to disable
+that startup report. This check does not create Stripe resources or charge money.
