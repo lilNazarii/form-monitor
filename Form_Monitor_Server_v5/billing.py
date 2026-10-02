@@ -214,6 +214,7 @@ class Billing:
             # A legacy record must be identified, not guessed from the current API key.
             try:
                 customer = stripe.Customer.retrieve(row['customer_id'], api_key=self.key(), max_network_retries=1)
+                customer = customer.to_dict() if hasattr(customer, 'to_dict') else customer
             except stripe.InvalidRequestError as error:
                 if error.code != 'resource_missing':
                     raise BillingUnavailable('The existing billing profile needs review.') from None
@@ -365,7 +366,7 @@ class Billing:
         if self.key() and os.environ.get('FM_BILLING_AUDIT_ON_START', '1' if os.environ.get('RENDER') else '0') == '1':
             from billing_readiness import log_readiness, log_network_readiness
             log_readiness(self)
-            if not self.stop.wait(10):
+            if not self.stop.wait(45):
                 log_network_readiness(self.origin)
         while not self.stop.wait(600):
             if not self.configured():
