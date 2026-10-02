@@ -13,8 +13,8 @@ class BillingReadinessTests(unittest.TestCase):
         billing.key.return_value='rk_live_hidden';billing.price_id.side_effect=lambda p:'price_'+p
         with patch('billing_readiness.stripe.StripeClient') as constructor:
             client=constructor.return_value
-            client.v1.accounts.retrieve_current.return_value=dict(charges_enabled=True,payouts_enabled=True,
-                details_submitted=True, email='private@example.com',requirements={'currently_due':[]})
+            client.v1.accounts.retrieve_current.return_value=stripe.Account.construct_from(dict(charges_enabled=True,payouts_enabled=True,
+                details_submitted=True, email='private@example.com',requirements={'currently_due':[]}), 'rk_test_fixture')
             client.v1.prices.retrieve.side_effect=lambda p:dict(active=True,currency='eur',unit_amount=500 if p=='price_solo' else 1200,
                 livemode=True,recurring=dict(interval='month',interval_count=1))
             client.v1.webhook_endpoints.list.return_value={'data':[dict(url='https://sentleaf.app/api/billing/webhook',status='enabled',enabled_events=list(EVENTS))]}
