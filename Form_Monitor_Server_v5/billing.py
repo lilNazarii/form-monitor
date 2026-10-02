@@ -315,6 +315,7 @@ class Billing:
                 self.update(user['id'], checkout_key=uuid.uuid4().hex, checkout_plan=plan, checkout_started=time.time())
                 row = self.row(user['id'])
             session = self.api(stripe.checkout.Session.create, mode='subscription', customer=row['customer_id'],
+                integration_identifier='sentleaf_checkout_' + ''.join(chr(97+int(c,16)) for c in row['checkout_key'][:8]),
                 client_reference_id=user['id'], line_items=[{'price':self.price_id(plan), 'quantity':1}],
                 subscription_data={'metadata':{'sentleaf_user':user['id']}},
                 success_url=self.origin+'/workspace#billing/return', cancel_url=self.origin+'/workspace#billing',
@@ -358,6 +359,9 @@ class Billing:
                 db.execute('DELETE FROM billing_events WHERE received<?', (time.time()-90*86400,))
 
     def reconcile(self):
+        if self.key() and os.environ.get('FM_BILLING_AUDIT_ON_START', '1' if os.environ.get('RENDER') else '0') == '1':
+            from billing_readiness import log_readiness
+            log_readiness(self)
         while not self.stop.wait(600):
             if not self.configured():
                 continue

@@ -201,11 +201,17 @@ def main():
 
                 report["stage"] = "open_site"
                 options = browser_options()
-                from server_network import validate_url, browser_route
+                from server_network import validate_url, browser_routes
                 validate_url(SITE_URL)
-                browser = p.chromium.launch(headless=True, args=["--disable-dev-shm-usage"])
+                expected_host = os.environ.get('FM_VERIFIED_FORM_HOST')
+                if expected_host and urlsplit(SITE_URL).hostname != expected_host:
+                    raise CheckFailed('The form hostname does not match its verified website.')
+                browser = p.chromium.launch(headless=True, args=["--disable-dev-shm-usage",
+                    "--host-resolver-rules=MAP * ~NOTFOUND", "--disable-quic",
+                    "--force-webrtc-ip-handling-policy=disable_non_proxied_udp"])
                 context = browser.new_context(service_workers="block", **options)
-                context.route("**/*", browser_route)
+                context.route("**/*", browser_routes(SITE_URL))
+                context.route_web_socket("**/*", lambda ws: ws.close())
                 page = context.new_page()
                 page.set_default_timeout(15000)
 

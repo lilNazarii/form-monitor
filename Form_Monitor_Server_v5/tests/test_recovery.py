@@ -64,7 +64,7 @@ class RecoveryTests(unittest.TestCase):
         second=self.app.test_client();self.assertEqual(self.post(second,'/api/login',dict(email='owner@example.com',password=self.password)).status_code,200)
         w=self.hub.workspace(self.user);connection='b'*32
         w.oauth.store.save(connection,dict(email='inbox@gmail.example',client_id='test.apps.googleusercontent.com',access_token='test-access',refresh_token='test-refresh',expires_at=time.time()+3600))
-        with patch('server.validate_url'):ident=w.save(dict(name='Saved monitor',url='https://forms.example/contact/',interval=60,connection_id=connection))
+        with patch.object(self.hub.sites,'require'):ident=w.save(dict(name='Saved monitor',url='https://forms.example/contact/',interval=60,connection_id=connection))
         w.due[ident]=time.time()+7200;w.persist_schedule()
         token,message=self.link('  OWNER@EXAMPLE.COM  ')
         self.assertEqual(message.kwargs['recipient'],'owner@example.com');self.assertTrue(message.kwargs['sensitive'])

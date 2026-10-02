@@ -42,7 +42,7 @@ class BackupTests(unittest.TestCase):
         self.workspace.oauth.store.save(self.connection, dict(email='owner@gmail.example',
             client_id='test.apps.googleusercontent.com', access_token='fake-access',
             refresh_token='fake-refresh', expires_at=time.time()+3600))
-        with patch('server.validate_url'):
+        with patch.object(self.hub.sites,'require'):
             self.monitor = self.workspace.save(dict(name='Saved form',url='https://forms.example/contact/',
                 interval=15,connection_id=self.connection))
         self.workspace.due[self.monitor] = time.time()+3600

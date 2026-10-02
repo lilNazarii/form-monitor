@@ -3,8 +3,10 @@ import os
 import secrets
 import tempfile
 import unittest
+from urllib.parse import urlsplit, parse_qs
 from unittest.mock import patch
 from server import create_app
+from google_mail import SCOPE
 
 
 class PublicRegistrationTests(unittest.TestCase):
@@ -64,6 +66,36 @@ class PublicRegistrationTests(unittest.TestCase):
         self.assertEqual(self.post(self.visitor, '/api/login', {
             'email':'random@example.net', 'password':'new long enough password'}).status_code, 200)
         self.assertFalse(self.get(self.visitor, '/api/session').json['user']['owner'])
+
+    def test_new_customer_connects_verifies_and_runs_without_owner_intervention(self):
+        self.register(self.owner, 'owner@example.com', setup_code=os.environ['FM_SETUP_CODE'])
+        self.assertEqual(self.register(self.visitor, 'new.customer@example.net').status_code, 200)
+        value=self.post(self.visitor,'/api/google/start',{})
+        query=parse_qs(urlsplit(value.json['url']).query)
+        with patch('server_google.request_json',side_effect=[dict(access_token='test-access',refresh_token='test-refresh',scope=SCOPE,expires_in=3600),dict(emailAddress='new.customer@gmail.example')]):
+            response=self.get(self.visitor,'/oauth/google/callback?state='+query['state'][0]+'&code=test-code')
+            self.assertEqual(response.status_code,303)
+        connection=self.get(self.visitor,'/api/state').json['google']['accounts'][0]['id']
+        self.assertEqual(self.post(self.visitor,'/api/billing/trial',{}).status_code,200)
+        data=dict(name='Customer contact form',url='https://new-customer.example/contact/',interval=360,connection_id=connection)
+        with patch('server_network.socket.getaddrinfo',return_value=[(2,1,6,'',('93.184.216.34',443))]):
+            self.assertEqual(self.post(self.visitor,'/api/profiles',data).status_code,400)
+            challenge=self.post(self.visitor,'/api/sites/challenge',{'url':data['url']})
+            self.assertEqual(challenge.status_code,200,challenge.json)
+            with patch('site_verification.public_request',return_value=(200,{},challenge.json['token'].encode())):
+                self.assertTrue(self.post(self.visitor,'/api/sites/verify',{'url':data['url']}).json['verified'])
+            saved=self.post(self.visitor,'/api/profiles',data)
+            self.assertEqual(saved.status_code,200,saved.json)
+            user=self.get(self.visitor,'/api/session').json['user'];workspace=self.hub.workspace(user)
+            with patch.dict(os.environ,{'RESEND_API_KEY':'fake'}),patch('workspace.subprocess.Popen') as popen:
+                child=popen.return_value.__enter__.return_value;child.stdout=[];child.wait.return_value=0
+                response=self.post(self.visitor,'/api/run',{'id':saved.json['id']})
+                self.assertEqual(response.status_code,200,response.json)
+                workspace.worker.join(timeout=5)
+                self.assertEqual(popen.call_args.kwargs['env']['FM_VERIFIED_FORM_HOST'],'new-customer.example')
+                self.assertNotIn('LIVE_LINK_PASSWORD',popen.call_args.kwargs['env'])
+        self.assertEqual(self.post(self.visitor,'/api/billing/readiness',{}).status_code,403)
+        self.assertEqual(self.get(self.owner,'/api/state').json['profiles'],[])
 
 
 if __name__ == '__main__': unittest.main()
