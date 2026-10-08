@@ -135,6 +135,42 @@ class ServerTests(unittest.TestCase):
                     self.assertEqual(r.headers['Location'],'https://beta.example'+path)
                     self.assertNotIn('Set-Cookie',r.headers)
                     self.assertEqual(r.headers['Cache-Control'],'no-store')
+
+    def test_search_discovery_only_lists_public_canonical_pages(self):
+        from xml.etree import ElementTree
+        visitor=self.app.test_client()
+        response=self.get(visitor,'/sitemap.xml')
+        self.assertEqual(response.status_code,200)
+        self.assertEqual(response.mimetype,'application/xml')
+        urls=[node.text for node in ElementTree.fromstring(response.data).iter('{http://www.sitemaps.org/schemas/sitemap/0.9}loc')]
+        self.assertEqual(urls,['https://beta.example/','https://beta.example/privacy','https://beta.example/contact'])
+        for url in urls:
+            r=visitor.get(url+'?source=test')
+            self.assertEqual(r.status_code,200)
+            self.assertEqual(r.headers['Link'],'<'+url+'>; rel="canonical"')
+            self.assertNotIn('X-Robots-Tag',r.headers)
+            r.close()
+        robots=self.get(visitor,'/robots.txt')
+        self.assertEqual(robots.status_code,200)
+        self.assertEqual(robots.mimetype,'text/plain')
+        self.assertIn('Sitemap: https://beta.example/sitemap.xml',robots.text)
+
+    def test_private_and_auth_pages_remain_protected_and_not_indexable(self):
+        visitor=self.app.test_client()
+        for client,path,status in (
+            (visitor,'/workspace',303),(self.a,'/workspace',200),
+            (visitor,'/login',200),(visitor,'/forgot-password',200),
+            (visitor,'/reset-password?token=not-a-real-token',200),
+            (visitor,'/api/state',401),(self.a,'/api/state',200),
+            (visitor,'/healthz',200),(visitor,'/not-a-page',404),
+            (visitor,'/evidence/private/run/page.png',401)):
+            with self.subTest(path=path,status=status):
+                response=self.get(client,path)
+                self.assertEqual(response.status_code,status)
+                self.assertEqual(response.headers['X-Robots-Tag'],'noindex')
+                self.assertNotIn('Link',response.headers)
+                response.close()
+        self.assertEqual(self.get(visitor,'/workspace').headers['Location'],'/login')
     def test_old_render_domain_cannot_access_accounts_or_accept_mutations(self):
         for path in ('/api/session','/api/state','/oauth/google/callback?code=secret','/evidence/private/page.png'):
             with self.subTest(path=path):
