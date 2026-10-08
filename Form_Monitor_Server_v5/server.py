@@ -1,6 +1,7 @@
 """Single-instance HTTPS application. Run with the supplied Gunicorn config."""
 import atexit
 from contextlib import ExitStack
+from html import escape
 import io
 import logging
 import os
@@ -10,7 +11,7 @@ import threading
 import time
 from pathlib import Path
 from urllib.parse import urlsplit
-from flask import Flask, request, jsonify, redirect, send_file, g
+from flask import Flask, Response, request, jsonify, redirect, send_file, g
 from accounts import Accounts
 from workspace import Workspace, read_json, write_json
 from server_google import WebOAuth
@@ -216,6 +217,7 @@ def create_app():
     if parsed.scheme!='https' or not parsed.hostname or parsed.path or parsed.query or parsed.fragment or parsed.username or parsed.port not in (None,443):
         raise RuntimeError('Set FM_PUBLIC_URL to the canonical HTTPS origin.')
     render_host=os.environ.get('RENDER_EXTERNAL_HOSTNAME','').strip().lower()
+    indexable_pages=('/', '/privacy', '/contact')
     redirect_pages={'/','/workspace','/login','/forgot-password','/reset-password'}
     for key in ('FM_ENCRYPTION_KEY','FM_SETUP_CODE','FM_ALLOWED_EMAILS','FM_STORAGE_ROOT'):
         if not os.environ.get(key):raise RuntimeError('Missing server setting: '+key)
@@ -268,6 +270,13 @@ def create_app():
     @app.after_request
     def security_headers(response):
         response.headers.update({'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer','Strict-Transport-Security':'max-age=31536000', 'Content-Security-Policy':"default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"})
+        if request.path in indexable_pages and response.status_code == 200:
+            # Canonical URLs come from trusted configuration, never query strings.
+            response.headers['Link'] = '<' + origin + request.path + '>; rel="canonical"'
+        elif (response.mimetype in ('text/html', 'application/json')
+              or request.path.startswith(('/api/', '/oauth/', '/evidence/'))
+              or response.status_code >= 400):
+            response.headers['X-Robots-Tag'] = 'noindex'
         return response
 
     @app.errorhandler(ValueError)
@@ -286,6 +295,14 @@ def create_app():
 
     @app.get('/healthz')
     def health():return jsonify(ok=True)
+    @app.get('/robots.txt')
+    def robots():
+        # Authentication protects private data. Allow crawling so noindex is seen.
+        return Response('User-agent: *\nAllow: /\n\nSitemap: '+origin+'/sitemap.xml\n',mimetype='text/plain')
+    @app.get('/sitemap.xml')
+    def sitemap():
+        urls=''.join('<url><loc>'+escape(origin+path)+'</loc></url>' for path in indexable_pages)
+        return Response('<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'+urls+'</urlset>\n',mimetype='application/xml')
     @app.get('/api/session')
     def session():return jsonify(user=g.auth['user'] if g.auth else None,csrf=g.auth['csrf'] if g.auth else hub.accounts.public_csrf,setup_required=hub.accounts.setup_required(),public_registration=public_registration)
     @app.get('/api/plans')
